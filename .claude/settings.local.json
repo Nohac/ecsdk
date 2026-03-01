@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo build 2>&1)",
+      "Bash(cargo clippy 2>&1)",
+      "Bash(cargo run 2>&1)",
+      "WebFetch(domain:github.com)"
+    ]
+  }
+}

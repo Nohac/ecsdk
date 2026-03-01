@@ -1,119 +1,86 @@
 use bevy_ecs::prelude::*;
-use tokio::{
-    select,
-    signal::ctrl_c,
-    sync::mpsc::{Receiver, channel, unbounded_channel},
-};
+use tokio::{select, signal::ctrl_c, sync::mpsc};
 
-#[derive(Component, Debug)]
-struct Position {
-    x: f32,
-    y: f32,
-}
-#[derive(Component)]
-struct Velocity {
-    x: f32,
-    y: f32,
-}
-
-#[derive(Component, Debug)]
-struct VirtualMachine {
-    name: String,
-}
-
-#[derive(Component, Debug)]
-struct Stage {
-    title: String,
-    index: usize,
-}
-
-#[derive(Component, Debug)]
-enum Status {
-    Active,
-    Skipped,
-    Complete,
-    Failed,
-}
-
-#[derive(Component, Debug)]
-struct ProgressBar(usize);
-
-#[derive(Component, Debug)]
-struct ProgressStream(Vec<String>);
-
-#[derive(Component, Debug)]
-struct CommandWindow {
-    w: usize,
-    h: usize,
-}
-
-fn render_stream_stage(mut query: Query<(&Stage, &Status)>) {}
-
-// impl<T> Stage<T> {
-//     fn new(title: String, data: T) -> Self {
-//
-//     }
-// }
-
-// This system moves each entity with a Position and Velocity component
-fn movement(mut query: Query<(&mut Position, &Velocity)>) {
-    for (mut position, velocity) in &mut query {
-        position.x += velocity.x;
-        position.y += velocity.y;
-        println!("{position:?}");
-    }
-}
-
-#[derive(Event)]
-struct SystemEvent;
-
-fn initialize(mut c: Commands) {
-    println!("sending an event");
-    c.trigger(SystemEvent);
-}
-
-fn on_event_triggered(ev: On<SystemEvent>) {
-    println!("event recieved");
-}
-
-enum EvTy {
-    Start,
-    Working,
-    Stop,
-}
+use ecstest::components::*;
+use ecstest::events::*;
+use ecstest::render::build_render_schedule;
+use ecstest::resources::{EventSender, TokioHandle};
+use ecstest::systems::build_startup_schedule;
+use ecstest::systems::build_update_schedule;
+use ecstest::systems::lifecycle;
 
 #[tokio::main]
 async fn main() {
-    // Create a new empty World to hold our Entities and Components
+    let (tx, mut rx) = mpsc::unbounded_channel::<AppEvent>();
+    let tx_ctrl_c = tx.clone();
+
     let mut world = World::new();
+    world.insert_resource(EventSender(tx));
+    world.insert_resource(TokioHandle(tokio::runtime::Handle::current()));
 
-    // Spawn an entity with Position and Velocity components
-    world.spawn((Position { x: 0.0, y: 0.0 }, Velocity { x: 1.0, y: 0.0 }));
+    // Register observers
+    world.add_observer(lifecycle::handle_download_complete);
+    world.add_observer(lifecycle::handle_boot_complete);
+    world.add_observer(lifecycle::handle_shutdown_all);
+    world.add_observer(lifecycle::handle_shutdown_complete);
 
-    // Create a new Schedule, which defines an execution strategy for Systems
-    let mut startup = Schedule::default();
-    let mut update = Schedule::default();
+    let mut startup = build_startup_schedule();
+    let mut update = build_update_schedule();
+    let mut render = build_render_schedule();
 
-    // Add our system to the schedule
-    startup.add_systems(initialize);
-    update.add_systems(movement);
-    world.add_observer(on_event_triggered);
-
+    // Startup: spawn containers, then run ordering (kicks off first downloads)
     startup.run(&mut world);
-    let (tx, mut event) = unbounded_channel();
-    // Run the schedule once. If your app has a "loop", you would run this once per loop
-    vec![EvTy::Start, EvTy::Working, EvTy::Stop]
-        .into_iter()
-        .for_each(|e| tx.send(e).unwrap());
+    update.run(&mut world);
+    render.run(&mut world);
 
+    let mut shutting_down = false;
+
+    // Event loop — purely reactive, only wakes on events
     loop {
         select! {
-            ev = event.recv() => {
-                // inject the event
-                update.run(&mut world);
-                continue;
+            event = rx.recv() => {
+                let Some(event) = event else { break };
+                match event {
+                    AppEvent::AllContainersReady => {
+                        render.run(&mut world);
+                        println!("\nAll containers ready.");
+                        break;
+                    }
+                    AppEvent::ShutdownAll => {
+                        if !shutting_down {
+                            shutting_down = true;
+                            println!("\nShutting down...");
+                            world.trigger(ShutdownAllEcs);
+                            world.flush();
+                            update.run(&mut world);
+                            render.run(&mut world);
+                        }
+                    }
+                    AppEvent::ShutdownComplete(entity) => {
+                        inject_event(&mut world, AppEvent::ShutdownComplete(entity));
+                        update.run(&mut world);
+                        render.run(&mut world);
+
+                        // Check if all containers are now stopped
+                        let all_stopped = world
+                            .query::<&ContainerPhase>()
+                            .iter(&world)
+                            .all(|p| *p == ContainerPhase::Stopped);
+                        if all_stopped && shutting_down {
+                            println!("\nAll containers stopped.");
+                            break;
+                        }
+                    }
+                    event => {
+                        inject_event(&mut world, event);
+                        update.run(&mut world);
+                        render.run(&mut world);
+                    }
+                }
             }
-            _ = ctrl_c() => {break}
+            _ = ctrl_c() => {
+                let _ = tx_ctrl_c.send(AppEvent::ShutdownAll);
+            }
         }
     }
 }
