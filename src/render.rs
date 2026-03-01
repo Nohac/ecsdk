@@ -2,15 +2,21 @@ use std::collections::HashMap;
 
 use bevy_ecs::prelude::*;
 
-use crate::components::*;
+use crate::container::*;
 
 #[derive(Default)]
-pub struct RenderState {
+struct RenderState {
     last_phase: HashMap<Entity, ContainerPhase>,
     last_progress: HashMap<Entity, u64>,
 }
 
-pub fn render_plain(
+pub fn build_render_schedule() -> Schedule {
+    let mut schedule = Schedule::default();
+    schedule.add_systems(render_plain);
+    schedule
+}
+
+fn render_plain(
     query: Query<(
         Entity,
         &ContainerName,

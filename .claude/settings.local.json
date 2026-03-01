@@ -4,7 +4,9 @@
       "Bash(cargo build 2>&1)",
       "Bash(cargo clippy 2>&1)",
       "Bash(cargo run 2>&1)",
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "Bash(wc -l /home/jonas/Development/Rust/ecstest/src/*.rs /home/jonas/Development/Rust/ecstest/src/**/*.rs)",
+      "Bash(cargo fmt 2>&1)"
     ]
   }
 }

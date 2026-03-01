@@ -1,5 +1,4 @@
-pub mod components;
-pub mod events;
+pub mod bridge;
+pub mod container;
+pub mod lifecycle;
 pub mod render;
-pub mod resources;
-pub mod systems;
