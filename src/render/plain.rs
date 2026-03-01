@@ -5,35 +5,33 @@ use bevy_ecs::prelude::*;
 use crate::container::*;
 
 #[derive(Default)]
-struct RenderState {
+pub(super) struct PlainRenderState {
     last_phase: HashMap<Entity, ContainerPhase>,
     last_progress: HashMap<Entity, u64>,
+    log_line_count: HashMap<Entity, usize>,
 }
 
-pub fn build_render_schedule() -> Schedule {
-    let mut schedule = Schedule::default();
-    schedule.add_systems(render_plain);
-    schedule
-}
-
-fn render_plain(
+#[allow(clippy::type_complexity)]
+pub(super) fn render_plain(
     query: Query<(
         Entity,
         &ContainerName,
         &StartOrder,
         &ContainerPhase,
         Option<&DownloadProgress>,
+        &LogBuffer,
     )>,
-    total_count: Query<Entity, With<ContainerName>>,
-    mut state: Local<RenderState>,
+    system_query: Query<(Entity, &ContainerName, &LogBuffer), With<SystemEntity>>,
+    total_count: Query<Entity, (With<ContainerName>, Without<SystemEntity>)>,
+    mut state: Local<PlainRenderState>,
 ) {
     let total = total_count.iter().count();
 
     // Collect and sort by StartOrder for consistent display
     let mut containers: Vec<_> = query.iter().collect();
-    containers.sort_by_key(|(_, _, order, _, _)| order.0);
+    containers.sort_by_key(|(_, _, order, _, _, _)| order.0);
 
-    for (idx, (entity, name, _order, phase, progress)) in containers.iter().enumerate() {
+    for (idx, (entity, name, _order, phase, progress, log_buf)) in containers.iter().enumerate() {
         let display_idx = idx + 1;
         let entity = *entity;
         let phase = **phase;
@@ -72,5 +70,21 @@ fn render_plain(
             );
             state.last_progress.insert(entity, prog.downloaded);
         }
+
+        // Print new log lines
+        let seen = state.log_line_count.get(&entity).copied().unwrap_or(0);
+        for line in log_buf.lines.iter().skip(seen) {
+            println!("  {} | {}", name.0, line.text);
+        }
+        state.log_line_count.insert(entity, log_buf.lines.len());
+    }
+
+    // System entity logs
+    for (entity, name, log_buf) in &system_query {
+        let seen = state.log_line_count.get(&entity).copied().unwrap_or(0);
+        for line in log_buf.lines.iter().skip(seen) {
+            println!("  {} | {}", name.0, line.text);
+        }
+        state.log_line_count.insert(entity, log_buf.lines.len());
     }
 }

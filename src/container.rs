@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use bevy_ecs::prelude::*;
 
 #[derive(Component)]
@@ -27,6 +29,30 @@ pub struct DownloadProgress {
     pub total: u64,
 }
 
+#[derive(Clone, Debug)]
+pub struct LogLine {
+    pub timestamp: Instant,
+    pub text: String,
+}
+
+#[derive(Component, Default)]
+pub struct LogBuffer {
+    pub lines: Vec<LogLine>,
+}
+
+impl LogBuffer {
+    pub fn push(&mut self, text: impl Into<String>) {
+        self.lines.push(LogLine {
+            timestamp: Instant::now(),
+            text: text.into(),
+        });
+    }
+}
+
+/// Marker for the system-wide log entity (global messages).
+#[derive(Component)]
+pub struct SystemEntity;
+
 pub fn build_startup_schedule() -> Schedule {
     let mut schedule = Schedule::default();
     schedule.add_systems(spawn_containers);
@@ -47,6 +73,14 @@ fn spawn_containers(mut commands: Commands) {
             ImageRef(image.to_string()),
             StartOrder(order),
             ContainerPhase::Pending,
+            LogBuffer::default(),
         ));
     }
+
+    // System entity for global messages
+    commands.spawn((
+        ContainerName("[system]".to_string()),
+        LogBuffer::default(),
+        SystemEntity,
+    ));
 }

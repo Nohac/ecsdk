@@ -6,7 +6,11 @@
       "Bash(cargo run 2>&1)",
       "WebFetch(domain:github.com)",
       "Bash(wc -l /home/jonas/Development/Rust/ecstest/src/*.rs /home/jonas/Development/Rust/ecstest/src/**/*.rs)",
-      "Bash(cargo fmt 2>&1)"
+      "Bash(cargo fmt 2>&1)",
+      "WebSearch",
+      "Bash(cargo doc --document-private-items -p crossterm 2>&1 | tail -5)",
+      "Bash(cargo clippy --fix --lib -p ecstest --allow-dirty 2>&1)",
+      "WebFetch(domain:raw.githubusercontent.com)"
     ]
   }
 }
