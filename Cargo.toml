@@ -1,0 +1,8 @@
+[package]
+name = "ecstest"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bevy_ecs = { version = "0.18.0", features = ["multi_threaded"] }
+tokio = { version = "1.49.0", features = ["full"] }
