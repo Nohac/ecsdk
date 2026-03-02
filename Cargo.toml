@@ -10,3 +10,4 @@ rand = "0.9"
 crossterm = { version = "0.29", features = ["event-stream"] }
 futures-util = "0.3"
 clap = { version = "4", features = ["derive"] }
+enum_dispatch = "0.3.13"

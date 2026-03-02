@@ -1,0 +1,37 @@
+use enum_dispatch::enum_dispatch;
+use tokio::sync::mpsc;
+
+use crate::backend_mock::MockBackend;
+
+pub struct PullProgress {
+    pub downloaded: u64,
+    pub total: u64,
+}
+
+#[allow(async_fn_in_trait)]
+#[enum_dispatch]
+pub trait ContainerBackend {
+    /// Pull an image. Sends progress updates via `progress_tx` and log lines via `log_tx`.
+    async fn pull_image(
+        &self,
+        image: &str,
+        progress_tx: mpsc::UnboundedSender<PullProgress>,
+        log_tx: mpsc::UnboundedSender<String>,
+    ) -> Result<(), String>;
+
+    /// Boot a container. Sends log lines as it starts up.
+    async fn boot_container(
+        &self,
+        name: &str,
+        log_tx: mpsc::UnboundedSender<String>,
+    ) -> Result<(), String>;
+
+    /// Stop a container.
+    async fn stop_container(&self, name: &str) -> Result<(), String>;
+}
+
+#[derive(Clone)]
+#[enum_dispatch(ContainerBackend)]
+pub enum ContainerRuntime {
+    Mock(MockBackend),
+}
