@@ -6,6 +6,8 @@ pub use tui::{install_panic_hook, terminal_init, terminal_teardown};
 use bevy_ecs::prelude::*;
 use clap::ValueEnum;
 
+use crate::container::build_merged_log_view;
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug, ValueEnum)]
 pub enum RenderMode {
     Plain,
@@ -34,8 +36,13 @@ impl TerminalSize {
 pub fn build_render_schedule(mode: RenderMode) -> Schedule {
     let mut schedule = Schedule::default();
     match mode {
-        RenderMode::Plain => schedule.add_systems(plain::render_plain),
-        RenderMode::Tui => schedule.add_systems(tui::render_tui),
-    };
+        RenderMode::Plain => {
+            schedule.add_systems(plain::render_plain);
+        }
+        RenderMode::Tui => {
+            schedule.add_systems(build_merged_log_view.before(tui::render_tui));
+            schedule.add_systems(tui::render_tui);
+        }
+    }
     schedule
 }

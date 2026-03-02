@@ -67,6 +67,49 @@ impl LogBuffer {
 #[derive(Component)]
 pub struct SystemEntity;
 
+/// A single merged log entry with its source entity and name.
+pub struct MergedLogEntry {
+    pub entity: Entity,
+    pub name: String,
+    pub line: LogLine,
+}
+
+/// All log lines from all entities, merged and sorted by timestamp.
+#[derive(Resource, Default)]
+pub struct MergedLogView {
+    pub entries: Vec<MergedLogEntry>,
+}
+
+/// System that rebuilds the merged log view each frame.
+pub fn build_merged_log_view(
+    containers: Query<(Entity, &ContainerName, &LogBuffer), Without<SystemEntity>>,
+    system_query: Query<(Entity, &ContainerName, &LogBuffer), With<SystemEntity>>,
+    mut view: ResMut<MergedLogView>,
+) {
+    view.entries.clear();
+
+    for (entity, name, log_buf) in &containers {
+        for line in &log_buf.lines {
+            view.entries.push(MergedLogEntry {
+                entity,
+                name: name.0.clone(),
+                line: line.clone(),
+            });
+        }
+    }
+    for (entity, name, log_buf) in &system_query {
+        for line in &log_buf.lines {
+            view.entries.push(MergedLogEntry {
+                entity,
+                name: name.0.clone(),
+                line: line.clone(),
+            });
+        }
+    }
+
+    view.entries.sort_by_key(|e| e.line.timestamp);
+}
+
 pub fn build_startup_schedule() -> Schedule {
     let mut schedule = Schedule::default();
     schedule.add_systems(spawn_containers);

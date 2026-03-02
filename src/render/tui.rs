@@ -118,9 +118,8 @@ pub(super) fn render_tui(
         &StartOrder,
         &ContainerPhase,
         Option<&DownloadProgress>,
-        &LogBuffer,
     )>,
-    system_query: Query<(Entity, &ContainerName, &LogBuffer), With<SystemEntity>>,
+    merged_logs: Res<MergedLogView>,
     term_size: Res<TerminalSize>,
     mut state: Local<TuiRenderState>,
 ) {
@@ -134,7 +133,7 @@ pub(super) fn render_tui(
 
     // Collect and sort containers
     let mut containers: Vec<_> = query.iter().collect();
-    containers.sort_by_key(|(_, _, order, _, _, _)| order.0);
+    containers.sort_by_key(|(_, _, order, _, _)| order.0);
 
     let header_rows = containers.len();
     let separator_row = header_rows; // 0-indexed row for separator
@@ -155,12 +154,12 @@ pub(super) fn render_tui(
 
     let name_width = containers
         .iter()
-        .map(|(_, n, _, _, _, _)| n.0.len())
+        .map(|(_, n, _, _, _)| n.0.len())
         .max()
         .unwrap_or(10);
     let bar_width = 20;
 
-    for (idx, (entity, name, _order, phase, progress, _log_buf)) in containers.iter().enumerate() {
+    for (idx, (entity, name, _order, phase, progress)) in containers.iter().enumerate() {
         let entity = *entity;
         let phase = **phase;
 
@@ -217,25 +216,12 @@ pub(super) fn render_tui(
 
     // ── Log section (scrolling) ──
 
-    // Merge all log lines from all entities, sorted by timestamp
-    let mut all_logs: Vec<(Entity, &str, &LogLine)> = Vec::new();
-
-    for (entity, name, _order, _phase, _progress, log_buf) in &containers {
-        for line in &log_buf.lines {
-            all_logs.push((*entity, &name.0, line));
-        }
-    }
-    for (entity, name, log_buf) in &system_query {
-        for line in &log_buf.lines {
-            all_logs.push((entity, &name.0, line));
-        }
-    }
-
-    all_logs.sort_by_key(|(_, _, line)| line.timestamp);
-
-    let new_lines = &all_logs[state.total_log_lines_rendered..];
-    if !new_lines.is_empty() {
-        for (entity, name, line) in new_lines {
+    let new_entries = &merged_logs.entries[state.total_log_lines_rendered..];
+    if !new_entries.is_empty() {
+        for entry in new_entries {
+            let entity = &entry.entity;
+            let name = &entry.name;
+            let line = &entry.line;
             // Scroll up within the scroll region, then write at bottom
             let _ = out.queue(MoveTo(0, rows as u16 - 1));
             let _ = out.queue(ScrollUp(1));
@@ -259,7 +245,7 @@ pub(super) fn render_tui(
             let _ = out.queue(Print(text));
         }
 
-        state.total_log_lines_rendered = all_logs.len();
+        state.total_log_lines_rendered = merged_logs.entries.len();
     }
 
     let _ = out.flush();
