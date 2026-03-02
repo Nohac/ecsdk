@@ -23,6 +23,20 @@ pub enum ContainerPhase {
     Failed,
 }
 
+impl ContainerPhase {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Pending => "Pending",
+            Self::PullingImage => "Pulling image",
+            Self::Starting => "Starting",
+            Self::Running => "Running",
+            Self::Stopping => "Stopping",
+            Self::Stopped => "Stopped",
+            Self::Failed => "Failed",
+        }
+    }
+}
+
 #[derive(Component)]
 pub struct DownloadProgress {
     pub downloaded: u64,

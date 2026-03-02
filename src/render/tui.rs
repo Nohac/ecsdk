@@ -47,18 +47,6 @@ fn phase_color(phase: ContainerPhase) -> (Color, Option<Attribute>) {
     }
 }
 
-fn phase_label(phase: ContainerPhase) -> &'static str {
-    match phase {
-        ContainerPhase::Pending => "Pending",
-        ContainerPhase::PullingImage => "Pulling image",
-        ContainerPhase::Starting => "Starting",
-        ContainerPhase::Running => "Running",
-        ContainerPhase::Stopping => "Stopping",
-        ContainerPhase::Stopped => "Stopped",
-        ContainerPhase::Failed => "Failed",
-    }
-}
-
 fn progress_bar(downloaded: u64, total: u64, width: usize) -> String {
     if total == 0 {
         return format!("[{:>width$}]", "", width = width);
@@ -194,7 +182,7 @@ pub(super) fn render_tui(
         }
 
         let (color, attr) = phase_color(phase);
-        let label = phase_label(phase);
+        let label = phase.label();
 
         let _ = out.queue(MoveTo(0, idx as u16));
         let _ = out.queue(Clear(ClearType::CurrentLine));

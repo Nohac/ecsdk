@@ -48,16 +48,7 @@ pub(super) fn render_plain(
         };
 
         if phase_changed {
-            let phase_str = match phase {
-                ContainerPhase::Pending => "Pending",
-                ContainerPhase::PullingImage => "Pulling image",
-                ContainerPhase::Starting => "Starting",
-                ContainerPhase::Running => "Running",
-                ContainerPhase::Stopping => "Stopping",
-                ContainerPhase::Stopped => "Stopped",
-                ContainerPhase::Failed => "Failed",
-            };
-            println!("[{display_idx}/{total}] {} — {phase_str}", name.0);
+            println!("[{display_idx}/{total}] {} — {}", name.0, phase.label());
             state.last_phase.insert(entity, phase);
         } else if progress_changed
             && let Some(prog) = progress
