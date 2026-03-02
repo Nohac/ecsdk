@@ -1,8 +1,6 @@
-use std::time::Duration;
-
 use bevy_ecs::prelude::*;
-use rand::Rng;
 
+use crate::backend::{ContainerBackend, ContainerRuntime};
 use crate::bridge::{AppExit, EventSender, TokioHandle};
 use crate::container::*;
 
@@ -27,6 +25,10 @@ pub struct AsyncLogLine {
     pub text: String,
 }
 
+/// Holds the container backend implementation as a shared resource.
+#[derive(Resource, Clone)]
+pub struct Backend(pub ContainerRuntime);
+
 pub fn build_update_schedule() -> Schedule {
     let mut schedule = Schedule::default();
     schedule.add_systems(enforce_ordering);
@@ -43,11 +45,12 @@ pub fn register_observers(world: &mut World) {
 
 /// Queries Pending containers. If all containers with a lower StartOrder
 /// are >= Running, transitions this container to PullingImage and spawns
-/// an async download task.
-pub fn enforce_ordering(
+/// an async download task via the backend.
+fn enforce_ordering(
     mut commands: Commands,
     pending: Query<(Entity, &ImageRef, &StartOrder, &ContainerPhase)>,
     all: Query<(&StartOrder, &ContainerPhase)>,
+    backend: Res<Backend>,
     tx: Res<EventSender>,
     handle: Res<TokioHandle>,
 ) {
@@ -76,47 +79,52 @@ pub fn enforce_ordering(
                 },
             ));
 
-            // Pre-generate random delays (ThreadRng is !Send)
-            let mut rng = rand::rng();
-            let delays: Vec<u64> = (0..10).map(|_| rng.random_range(200..=500)).collect();
-
+            let backend = backend.0.clone();
             let tx = tx.clone();
             let image_name = image.0.clone();
             handle.0.spawn(async move {
-                // Log the start of the pull
-                tx.trigger(AsyncLogLine {
-                    entity,
-                    text: format!("Pulling {image_name}..."),
+                let (progress_tx, mut progress_rx) =
+                    tokio::sync::mpsc::unbounded_channel::<crate::backend::PullProgress>();
+                let (log_tx, mut log_rx) = tokio::sync::mpsc::unbounded_channel();
+
+                // Forward progress updates to ECS
+                let tx2 = tx.clone();
+                let progress_fwd = tokio::spawn(async move {
+                    while let Some(p) = progress_rx.recv().await {
+                        let tx3 = tx2.clone();
+                        tx3.send(move |world| {
+                            if let Some(mut dp) = world.get_mut::<DownloadProgress>(entity) {
+                                dp.downloaded = p.downloaded;
+                                dp.total = p.total;
+                            }
+                        });
+                    }
                 });
 
-                let total = 100_000_000u64;
-                for (i, delay) in delays.into_iter().enumerate() {
-                    tokio::time::sleep(Duration::from_millis(delay)).await;
-                    let downloaded = total * (i as u64 + 1) / 10;
-                    let tx2 = tx.clone();
-                    tx2.send(move |world| {
-                        if let Some(mut p) = world.get_mut::<DownloadProgress>(entity) {
-                            p.downloaded = downloaded;
-                            p.total = total;
-                        }
-                    });
-                }
-                tx.trigger(AsyncLogLine {
-                    entity,
-                    text: "Pull complete".to_string(),
+                // Forward log lines to ECS
+                let tx2 = tx.clone();
+                let log_fwd = tokio::spawn(async move {
+                    while let Some(text) = log_rx.recv().await {
+                        tx2.trigger(AsyncLogLine { entity, text });
+                    }
                 });
+
+                let _ = backend.pull_image(&image_name, progress_tx, log_tx).await;
+                let _ = progress_fwd.await;
+                let _ = log_fwd.await;
                 tx.trigger(DownloadComplete(entity));
             });
         }
     }
 }
 
-/// Observer: DownloadComplete -> set phase to Starting, spawn boot task.
+/// Observer: DownloadComplete -> set phase to Starting, spawn boot task via backend.
 fn handle_download_complete(
     trigger: On<DownloadComplete>,
     mut commands: Commands,
     names: Query<&ContainerName>,
     mut logs: Query<&mut LogBuffer>,
+    backend: Res<Backend>,
     tx: Res<EventSender>,
     handle: Res<TokioHandle>,
 ) {
@@ -129,39 +137,21 @@ fn handle_download_complete(
 
     let container_name = names.get(entity).map(|n| n.0.clone()).unwrap_or_default();
 
-    let delay = rand::rng().random_range(500..=1500u64);
+    let backend = backend.0.clone();
     let tx = tx.clone();
     handle.0.spawn(async move {
-        // Simulated container stdout based on service type
-        let boot_lines = match container_name.as_str() {
-            "postgres" => vec![
-                ("PostgreSQL init process complete", 200),
-                ("LOG: listening on 0.0.0.0:5432", 300),
-            ],
-            "redis" => vec![
-                ("oO0OoO0Oo Redis is starting oO0OoO0Oo", 150),
-                ("Ready to accept connections on port 6379", 250),
-            ],
-            "api-server" => vec![
-                ("Connecting to database...", 300),
-                ("Server listening on :8080", 400),
-            ],
-            "web-frontend" => vec![
-                ("Compiling assets...", 400),
-                ("Serving on http://0.0.0.0:3000", 300),
-            ],
-            _ => vec![],
-        };
+        let (log_tx, mut log_rx) = tokio::sync::mpsc::unbounded_channel();
 
-        for (text, extra_delay) in boot_lines {
-            tokio::time::sleep(Duration::from_millis(extra_delay)).await;
-            tx.trigger(AsyncLogLine {
-                entity,
-                text: text.to_string(),
-            });
-        }
+        // Forward log lines to ECS
+        let tx2 = tx.clone();
+        let log_fwd = tokio::spawn(async move {
+            while let Some(text) = log_rx.recv().await {
+                tx2.trigger(AsyncLogLine { entity, text });
+            }
+        });
 
-        tokio::time::sleep(Duration::from_millis(delay)).await;
+        let _ = backend.boot_container(&container_name, log_tx).await;
+        let _ = log_fwd.await;
         tx.trigger(BootComplete(entity));
     });
 }
@@ -183,9 +173,6 @@ fn handle_boot_complete(
         log_buf.push("Container started");
     }
 
-    // The triggered entity still has its old phase (Starting) since commands
-    // are deferred. Count how many are not yet Running — if only 1 (this one),
-    // then after this command applies, all will be Running.
     let not_running = all_phases
         .iter()
         .filter(|p| **p != ContainerPhase::Running)
@@ -201,13 +188,15 @@ fn handle_boot_complete(
     }
 }
 
-/// Observer: ShutdownAll -> set active containers to Stopping, spawn shutdown tasks.
+/// Observer: ShutdownAll -> set active containers to Stopping, spawn shutdown tasks via backend.
+#[allow(clippy::too_many_arguments)]
 fn handle_shutdown_all(
     _trigger: On<ShutdownAll>,
     mut commands: Commands,
-    containers: Query<(Entity, &ContainerPhase), Without<SystemEntity>>,
+    containers: Query<(Entity, &ContainerName, &ContainerPhase), Without<SystemEntity>>,
     mut logs: Query<&mut LogBuffer>,
     system_entity: Query<Entity, With<SystemEntity>>,
+    backend: Res<Backend>,
     tx: Res<EventSender>,
     handle: Res<TokioHandle>,
 ) {
@@ -217,7 +206,7 @@ fn handle_shutdown_all(
         log_buf.push("Shutting down...");
     }
 
-    for (entity, phase) in &containers {
+    for (entity, name, phase) in &containers {
         match phase {
             ContainerPhase::Running
             | ContainerPhase::PullingImage
@@ -229,10 +218,11 @@ fn handle_shutdown_all(
                     log_buf.push("Stopping container...");
                 }
 
-                let delay = rand::rng().random_range(200..=800u64);
+                let backend = backend.0.clone();
+                let container_name = name.0.clone();
                 let tx = tx.clone();
                 handle.0.spawn(async move {
-                    tokio::time::sleep(Duration::from_millis(delay)).await;
+                    let _ = backend.stop_container(&container_name).await;
                     tx.trigger(ShutdownComplete(entity));
                 });
             }

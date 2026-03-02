@@ -6,9 +6,11 @@ use crossterm::event::{Event, EventStream};
 use futures_util::StreamExt;
 use tokio::{select, signal::ctrl_c, sync::mpsc};
 
+use ecstest::backend::ContainerRuntime;
+use ecstest::backend_mock::MockBackend;
 use ecstest::bridge::{AppExit, EventSender, TokioHandle, WorldCmd};
-use ecstest::container::build_startup_schedule;
-use ecstest::lifecycle::{ShutdownAll, build_update_schedule, register_observers};
+use ecstest::container::{MergedLogView, build_startup_schedule};
+use ecstest::lifecycle::{Backend, ShutdownAll, build_update_schedule, register_observers};
 use ecstest::render::{
     RenderMode, TerminalSize, build_render_schedule, install_panic_hook, terminal_init,
     terminal_teardown,
@@ -51,6 +53,8 @@ async fn main() {
     world.insert_resource(TokioHandle(tokio::runtime::Handle::current()));
     world.insert_resource(TerminalSize::query_now());
     world.init_resource::<AppExit>();
+    world.insert_resource(Backend(ContainerRuntime::from(MockBackend)));
+    world.init_resource::<MergedLogView>();
 
     register_observers(&mut world);
 
