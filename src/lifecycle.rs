@@ -46,7 +46,7 @@ pub fn register_observers(world: &mut World) {
 /// Queries Pending containers. If all containers with a lower StartOrder
 /// are >= Running, transitions this container to PullingImage and spawns
 /// an async download task via the backend.
-fn enforce_ordering(
+pub fn enforce_ordering(
     mut commands: Commands,
     pending: Query<(Entity, &ImageRef, &StartOrder, &ContainerPhase)>,
     all: Query<(&StartOrder, &ContainerPhase)>,

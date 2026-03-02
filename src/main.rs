@@ -1,20 +1,13 @@
 use std::io::IsTerminal;
+use std::time::Duration;
 
-use bevy_ecs::prelude::*;
 use clap::Parser;
-use crossterm::event::{Event, EventStream};
-use futures_util::StreamExt;
-use tokio::{select, signal::ctrl_c, sync::mpsc};
+use tokio::net::UnixStream;
 
-use ecstest::backend::ContainerRuntime;
-use ecstest::backend_mock::MockBackend;
-use ecstest::bridge::{AppExit, EventSender, TokioHandle, WorldCmd};
-use ecstest::container::{MergedLogView, build_startup_schedule};
-use ecstest::lifecycle::{Backend, ShutdownAll, build_update_schedule, register_observers};
-use ecstest::render::{
-    RenderMode, TerminalSize, build_render_schedule, install_panic_hook, terminal_init,
-    terminal_teardown,
-};
+use ecstest::client::run_client;
+use ecstest::daemon::run_daemon;
+use ecstest::ipc::SOCKET_PATH;
+use ecstest::render::RenderMode;
 
 #[derive(Parser)]
 #[command(about = "ECS-driven container orchestration demo")]
@@ -22,6 +15,10 @@ struct Cli {
     /// Output mode (plain or tui). Defaults to tui when stdout is a terminal.
     #[arg(long, value_enum)]
     output: Option<RenderMode>,
+
+    /// Run in daemon mode (no UI, serves IPC).
+    #[arg(short, long)]
+    daemon: bool,
 }
 
 fn resolve_render_mode(explicit: Option<RenderMode>) -> RenderMode {
@@ -34,62 +31,47 @@ fn resolve_render_mode(explicit: Option<RenderMode>) -> RenderMode {
     })
 }
 
+/// Check if a daemon is already listening on the socket.
+async fn daemon_is_running() -> bool {
+    UnixStream::connect(SOCKET_PATH).await.is_ok()
+}
+
+/// Spawn the daemon as a background process and wait until it's ready.
+async fn spawn_daemon() {
+    let exe = std::env::current_exe().expect("Failed to get current executable path");
+    std::process::Command::new(exe)
+        .arg("--daemon")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::inherit())
+        .spawn()
+        .expect("Failed to spawn daemon");
+
+    // Wait for daemon to be ready
+    for _ in 0..50 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        if daemon_is_running().await {
+            return;
+        }
+    }
+    eprintln!("Timed out waiting for daemon to start");
+    std::process::exit(1);
+}
+
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
-    let mode = resolve_render_mode(cli.output);
 
-    if mode == RenderMode::Tui {
-        install_panic_hook();
-        terminal_init();
-    }
+    if cli.daemon {
+        run_daemon().await;
+    } else {
+        let mode = resolve_render_mode(cli.output);
 
-    let (tx, mut rx) = mpsc::unbounded_channel::<WorldCmd>();
-    let tx_ctrl_c = EventSender(tx.clone());
-    let tx_term = EventSender(tx.clone());
-
-    let mut world = World::new();
-    world.insert_resource(EventSender(tx));
-    world.insert_resource(TokioHandle(tokio::runtime::Handle::current()));
-    world.insert_resource(TerminalSize::query_now());
-    world.init_resource::<AppExit>();
-    world.insert_resource(Backend(ContainerRuntime::from(MockBackend)));
-    world.init_resource::<MergedLogView>();
-
-    register_observers(&mut world);
-
-    let mut startup = build_startup_schedule();
-    let mut update = build_update_schedule();
-    let mut render = build_render_schedule(mode);
-
-    startup.run(&mut world);
-    update.run(&mut world);
-    render.run(&mut world);
-
-    let mut term_events = EventStream::new();
-
-    loop {
-        select! {
-            Some(cmd) = rx.recv() => {
-                cmd(&mut world);
-                update.run(&mut world);
-                render.run(&mut world);
-                if world.resource::<AppExit>().0 { break; }
-            }
-            Some(Ok(event)) = term_events.next(), if mode == RenderMode::Tui => {
-                if let Event::Resize(cols, rows) = event {
-                    tx_term.send(move |world: &mut World| {
-                        world.resource_mut::<TerminalSize>().update(cols, rows);
-                    });
-                }
-            }
-            _ = ctrl_c() => {
-                tx_ctrl_c.trigger(ShutdownAll);
-            }
+        // Auto-spawn daemon if not already running
+        if !daemon_is_running().await {
+            spawn_daemon().await;
         }
-    }
 
-    if mode == RenderMode::Tui {
-        terminal_teardown();
+        run_client(mode).await;
     }
 }

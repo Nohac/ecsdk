@@ -2,6 +2,8 @@ use std::time::Instant;
 
 use bevy_ecs::prelude::*;
 
+use crate::protocol::Phase;
+
 #[derive(Component)]
 pub struct ContainerName(pub String);
 
@@ -33,6 +35,34 @@ impl ContainerPhase {
             Self::Stopping => "Stopping",
             Self::Stopped => "Stopped",
             Self::Failed => "Failed",
+        }
+    }
+}
+
+impl From<ContainerPhase> for Phase {
+    fn from(p: ContainerPhase) -> Self {
+        match p {
+            ContainerPhase::Pending => Phase::Pending,
+            ContainerPhase::PullingImage => Phase::PullingImage,
+            ContainerPhase::Starting => Phase::Starting,
+            ContainerPhase::Running => Phase::Running,
+            ContainerPhase::Stopping => Phase::Stopping,
+            ContainerPhase::Stopped => Phase::Stopped,
+            ContainerPhase::Failed => Phase::Failed,
+        }
+    }
+}
+
+impl From<Phase> for ContainerPhase {
+    fn from(p: Phase) -> Self {
+        match p {
+            Phase::Pending => ContainerPhase::Pending,
+            Phase::PullingImage => ContainerPhase::PullingImage,
+            Phase::Starting => ContainerPhase::Starting,
+            Phase::Running => ContainerPhase::Running,
+            Phase::Stopping => ContainerPhase::Stopping,
+            Phase::Stopped => ContainerPhase::Stopped,
+            Phase::Failed => ContainerPhase::Failed,
         }
     }
 }
