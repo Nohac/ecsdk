@@ -9,7 +9,8 @@ use tokio::{select, signal::ctrl_c, sync::mpsc};
 
 use crate::backend::ContainerRuntime;
 use crate::backend_mock::MockBackend;
-use crate::bridge::{AppExit, EventSender, TokioHandle, WorldCmd};
+use crate::bridge::{AppExit, WorldCmd};
+use crate::task::CommandSender;
 use crate::container::*;
 use crate::ipc::{ComposeDaemon, ComposeDaemonDispatcher, SOCKET_PATH};
 use crate::lifecycle::{Backend, ShutdownAll, register_observers};
@@ -188,6 +189,8 @@ fn broadcast_events(
 fn build_daemon_update_schedule() -> Schedule {
     let mut schedule = Schedule::default();
     schedule.add_systems(crate::lifecycle::enforce_ordering.before(broadcast_events));
+    schedule.add_systems(crate::lifecycle::check_all_running.before(broadcast_events));
+    schedule.add_systems(crate::lifecycle::check_all_stopped.before(broadcast_events));
     schedule.add_systems(broadcast_events);
     schedule
 }
@@ -197,7 +200,7 @@ fn build_daemon_update_schedule() -> Schedule {
 struct ComposeDaemonImpl {
     event_tx: broadcast::Sender<DaemonEvent>,
     snapshot: SharedSnapshot,
-    cmd_tx: EventSender,
+    cmd_tx: CommandSender,
 }
 
 impl ComposeDaemon for ComposeDaemonImpl {
@@ -244,11 +247,10 @@ pub async fn run_daemon() {
     let snapshot = SharedSnapshot::default();
 
     let (tx, mut rx) = mpsc::unbounded_channel::<WorldCmd>();
-    let event_sender = EventSender(tx);
+    let cmd_sender = CommandSender::new(tx, tokio::runtime::Handle::current());
 
     let mut world = World::new();
-    world.insert_resource(event_sender.clone());
-    world.insert_resource(TokioHandle(tokio::runtime::Handle::current()));
+    world.insert_resource(cmd_sender.clone());
     world.init_resource::<AppExit>();
     world.insert_resource(Backend(ContainerRuntime::from(MockBackend)));
     world.init_resource::<MergedLogView>();
@@ -272,7 +274,7 @@ pub async fn run_daemon() {
     let handler = ComposeDaemonImpl {
         event_tx: broadcast_tx,
         snapshot,
-        cmd_tx: event_sender,
+        cmd_tx: cmd_sender,
     };
 
     loop {

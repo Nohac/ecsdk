@@ -9,3 +9,4 @@ pub mod ipc;
 pub mod lifecycle;
 pub mod protocol;
 pub mod render;
+pub mod task;

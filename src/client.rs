@@ -9,7 +9,8 @@ use tokio::{select, signal::ctrl_c, sync::mpsc};
 
 use crate::backend::ContainerRuntime;
 use crate::backend_mirror::MirrorBackend;
-use crate::bridge::{AppExit, EventSender, TokioHandle, WorldCmd};
+use crate::bridge::{AppExit, WorldCmd};
+use crate::task::CommandSender;
 use crate::container::*;
 use crate::ipc::{ComposeDaemonClient, DaemonConnector, SOCKET_PATH};
 use crate::lifecycle::{Backend, register_observers};
@@ -19,18 +20,18 @@ use crate::render::{RenderMode, TerminalGuard, TerminalSize, build_render_schedu
 fn forward_daemon_event(
     event: Option<DaemonEvent>,
     broadcast_tx: &broadcast::Sender<DaemonEvent>,
-    event_sender: &EventSender,
+    cmd_sender: &CommandSender,
 ) {
     match event {
         Some(event) => {
             if matches!(event, DaemonEvent::Exit) {
-                event_sender.send(|world| world.resource_mut::<AppExit>().0 = true);
+                cmd_sender.send(|world: &mut World| world.resource_mut::<AppExit>().0 = true);
             }
             let _ = broadcast_tx.send(event);
         }
         None => {
             // Stream ended — daemon disconnected
-            event_sender.send(|world| world.resource_mut::<AppExit>().0 = true);
+            cmd_sender.send(|world: &mut World| world.resource_mut::<AppExit>().0 = true);
         }
     }
 }
@@ -94,11 +95,10 @@ pub async fn run_client(mode: RenderMode) {
 
     // Set up ECS world with full lifecycle (same as daemon, but with MirrorBackend)
     let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<WorldCmd>();
-    let event_sender = EventSender(cmd_tx);
+    let cmd_sender = CommandSender::new(cmd_tx, tokio::runtime::Handle::current());
 
     let mut world = World::new();
-    world.insert_resource(event_sender.clone());
-    world.insert_resource(TokioHandle(tokio::runtime::Handle::current()));
+    world.insert_resource(cmd_sender.clone());
     world.insert_resource(TerminalSize::query_now());
     world.init_resource::<AppExit>();
     world.init_resource::<MergedLogView>();
@@ -144,12 +144,12 @@ pub async fn run_client(mode: RenderMode) {
                 if world.resource::<AppExit>().0 { break; }
             }
             result = event_rx.recv() => {
-                forward_daemon_event(result.ok().flatten(), &broadcast_tx, &event_sender);
+                forward_daemon_event(result.ok().flatten(), &broadcast_tx, &cmd_sender);
             }
             Some(Ok(event)) = next_term_event(&mut term_events) => {
                 match event {
                     Event::Resize(cols, rows) => {
-                        event_sender.send(move |world| {
+                        cmd_sender.send(move |world: &mut World| {
                             world.resource_mut::<TerminalSize>().update(cols, rows);
                         });
                     }

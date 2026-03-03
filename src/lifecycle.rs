@@ -1,8 +1,9 @@
 use bevy_ecs::prelude::*;
 
 use crate::backend::{ContainerBackend, ContainerRuntime};
-use crate::bridge::{AppExit, EventSender, TokioHandle};
+use crate::bridge::AppExit;
 use crate::container::*;
+use crate::task::SpawnTask;
 
 // ECS trigger events — co-located with the observers that handle them.
 
@@ -18,13 +19,6 @@ pub struct ShutdownAll;
 #[derive(Event)]
 pub struct ShutdownComplete(pub Entity);
 
-/// Event carrying a log line from an async task back to an entity's LogBuffer.
-#[derive(Event)]
-pub struct AsyncLogLine {
-    pub entity: Entity,
-    pub text: String,
-}
-
 /// Holds the container backend implementation as a shared resource.
 #[derive(Resource, Clone)]
 pub struct Backend(pub ContainerRuntime);
@@ -32,6 +26,8 @@ pub struct Backend(pub ContainerRuntime);
 pub fn build_update_schedule() -> Schedule {
     let mut schedule = Schedule::default();
     schedule.add_systems(enforce_ordering);
+    schedule.add_systems(check_all_running);
+    schedule.add_systems(check_all_stopped);
     schedule
 }
 
@@ -40,7 +36,6 @@ pub fn register_observers(world: &mut World) {
     world.add_observer(handle_boot_complete);
     world.add_observer(handle_shutdown_all);
     world.add_observer(handle_shutdown_complete);
-    world.add_observer(handle_async_log_line);
 }
 
 /// Queries Pending containers. If all containers with a lower StartOrder
@@ -51,8 +46,6 @@ pub fn enforce_ordering(
     pending: Query<(Entity, &ImageRef, &StartOrder, &ContainerPhase)>,
     all: Query<(&StartOrder, &ContainerPhase)>,
     backend: Res<Backend>,
-    tx: Res<EventSender>,
-    handle: Res<TokioHandle>,
 ) {
     for (entity, image, order, phase) in &pending {
         if *phase != ContainerPhase::Pending {
@@ -71,53 +64,55 @@ pub fn enforce_ordering(
         });
 
         if predecessors_ready {
-            commands.entity(entity).insert((
-                ContainerPhase::PullingImage,
-                DownloadProgress {
-                    downloaded: 0,
-                    total: 0,
-                },
-            ));
-
             let backend = backend.0.clone();
-            let tx = tx.clone();
             let image_name = image.0.clone();
-            handle.0.spawn(async move {
-                let (progress_tx, mut progress_rx) =
-                    tokio::sync::mpsc::unbounded_channel::<crate::backend::PullProgress>();
-                let (log_tx, log_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
 
-                let tx_progress = tx.clone();
-                let tx_log = tx.clone();
-                let _ = tokio::join!(
-                    backend.pull_image(&image_name, progress_tx, log_tx),
-                    async move {
-                        while let Some(p) = progress_rx.recv().await {
-                            tx_progress.send(move |world| {
-                                if let Some(mut dp) =
-                                    world.get_mut::<DownloadProgress>(entity)
-                                {
-                                    dp.downloaded = p.downloaded;
-                                    dp.total = p.total;
-                                }
-                            });
-                        }
+            commands
+                .entity(entity)
+                .insert((
+                    ContainerPhase::PullingImage,
+                    DownloadProgress {
+                        downloaded: 0,
+                        total: 0,
                     },
-                    forward_logs(log_rx, entity, tx_log),
-                );
-                tx.trigger(DownloadComplete(entity));
-            });
-        }
-    }
-}
+                ))
+                .spawn_task(move |cmd| async move {
+                    let (progress_tx, mut progress_rx) =
+                        tokio::sync::mpsc::unbounded_channel::<crate::backend::PullProgress>();
+                    let (log_tx, mut log_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
 
-async fn forward_logs(
-    mut rx: tokio::sync::mpsc::UnboundedReceiver<String>,
-    entity: Entity,
-    tx: EventSender,
-) {
-    while let Some(text) = rx.recv().await {
-        tx.trigger(AsyncLogLine { entity, text });
+                    let entity = cmd.entity();
+                    let cmd_progress = cmd.clone();
+                    let cmd_logs = cmd.clone();
+                    let _ = tokio::join!(
+                        backend.pull_image(&image_name, progress_tx, log_tx),
+                        async move {
+                            while let Some(p) = progress_rx.recv().await {
+                                cmd_progress.push(move |world: &mut World| {
+                                    if let Some(mut dp) =
+                                        world.get_mut::<DownloadProgress>(entity)
+                                    {
+                                        dp.downloaded = p.downloaded;
+                                        dp.total = p.total;
+                                    }
+                                });
+                            }
+                        },
+                        async move {
+                            while let Some(text) = log_rx.recv().await {
+                                cmd_logs.push(move |world: &mut World| {
+                                    if let Some(mut log_buf) =
+                                        world.get_mut::<LogBuffer>(entity)
+                                    {
+                                        log_buf.push(text);
+                                    }
+                                });
+                            }
+                        },
+                    );
+                    cmd.trigger(DownloadComplete(entity));
+                });
+        }
     }
 }
 
@@ -128,41 +123,45 @@ fn handle_download_complete(
     names: Query<&ContainerName>,
     mut logs: Query<&mut LogBuffer>,
     backend: Res<Backend>,
-    tx: Res<EventSender>,
-    handle: Res<TokioHandle>,
 ) {
     let entity = trigger.event().0;
-    commands.entity(entity).insert(ContainerPhase::Starting);
 
     if let Ok(mut log_buf) = logs.get_mut(entity) {
         log_buf.push("Starting container...");
     }
 
     let container_name = names.get(entity).map(|n| n.0.clone()).unwrap_or_default();
-
     let backend = backend.0.clone();
-    let tx = tx.clone();
-    handle.0.spawn(async move {
-        let (log_tx, log_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
 
-        let tx_log = tx.clone();
-        let _ = tokio::join!(
-            backend.boot_container(&container_name, log_tx),
-            forward_logs(log_rx, entity, tx_log),
-        );
-        tx.trigger(BootComplete(entity));
-    });
+    commands
+        .entity(entity)
+        .insert(ContainerPhase::Starting)
+        .spawn_task(move |cmd| async move {
+            let (log_tx, mut log_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+
+            let entity = cmd.entity();
+            let cmd_logs = cmd.clone();
+            let _ = tokio::join!(
+                backend.boot_container(&container_name, log_tx),
+                async move {
+                    while let Some(text) = log_rx.recv().await {
+                        cmd_logs.push(move |world: &mut World| {
+                            if let Some(mut log_buf) = world.get_mut::<LogBuffer>(entity) {
+                                log_buf.push(text);
+                            }
+                        });
+                    }
+                },
+            );
+            cmd.trigger(BootComplete(entity));
+        });
 }
 
-/// Observer: BootComplete -> set phase to Running. If all containers are
-/// Running, log and set AppExit.
+/// Observer: BootComplete -> set phase to Running.
 fn handle_boot_complete(
     trigger: On<BootComplete>,
     mut commands: Commands,
-    all_phases: Query<&ContainerPhase, Without<SystemEntity>>,
     mut logs: Query<&mut LogBuffer>,
-    system_entity: Query<Entity, With<SystemEntity>>,
-    mut exit: ResMut<AppExit>,
 ) {
     let entity = trigger.event().0;
     commands.entity(entity).insert(ContainerPhase::Running);
@@ -170,24 +169,9 @@ fn handle_boot_complete(
     if let Ok(mut log_buf) = logs.get_mut(entity) {
         log_buf.push("Container started");
     }
-
-    let not_running = all_phases
-        .iter()
-        .filter(|p| **p != ContainerPhase::Running)
-        .count();
-
-    if not_running <= 1 {
-        if let Ok(sys) = system_entity.single()
-            && let Ok(mut log_buf) = logs.get_mut(sys)
-        {
-            log_buf.push("All containers ready.");
-        }
-        exit.0 = true;
-    }
 }
 
 /// Observer: ShutdownAll -> set active containers to Stopping, spawn shutdown tasks via backend.
-#[allow(clippy::too_many_arguments)]
 fn handle_shutdown_all(
     _trigger: On<ShutdownAll>,
     mut commands: Commands,
@@ -195,8 +179,6 @@ fn handle_shutdown_all(
     mut logs: Query<&mut LogBuffer>,
     system_entity: Query<Entity, With<SystemEntity>>,
     backend: Res<Backend>,
-    tx: Res<EventSender>,
-    handle: Res<TokioHandle>,
 ) {
     if let Ok(sys) = system_entity.single()
         && let Ok(mut log_buf) = logs.get_mut(sys)
@@ -210,33 +192,31 @@ fn handle_shutdown_all(
             | ContainerPhase::PullingImage
             | ContainerPhase::Starting
             | ContainerPhase::Pending => {
-                commands.entity(entity).insert(ContainerPhase::Stopping);
-
                 if let Ok(mut log_buf) = logs.get_mut(entity) {
                     log_buf.push("Stopping container...");
                 }
 
                 let backend = backend.0.clone();
                 let container_name = name.0.clone();
-                let tx = tx.clone();
-                handle.0.spawn(async move {
-                    let _ = backend.stop_container(&container_name).await;
-                    tx.trigger(ShutdownComplete(entity));
-                });
+
+                commands
+                    .entity(entity)
+                    .insert(ContainerPhase::Stopping)
+                    .spawn_task(move |cmd| async move {
+                        let _ = backend.stop_container(&container_name).await;
+                        cmd.trigger(ShutdownComplete(cmd.entity()));
+                    });
             }
             _ => {}
         }
     }
 }
 
-/// Observer: ShutdownComplete -> set phase to Stopped. If all stopped, set AppExit.
+/// Observer: ShutdownComplete -> set phase to Stopped.
 fn handle_shutdown_complete(
     trigger: On<ShutdownComplete>,
     mut commands: Commands,
-    all_phases: Query<&ContainerPhase, Without<SystemEntity>>,
     mut logs: Query<&mut LogBuffer>,
-    system_entity: Query<Entity, With<SystemEntity>>,
-    mut exit: ResMut<AppExit>,
 ) {
     let entity = trigger.event().0;
     commands.entity(entity).insert(ContainerPhase::Stopped);
@@ -244,26 +224,44 @@ fn handle_shutdown_complete(
     if let Ok(mut log_buf) = logs.get_mut(entity) {
         log_buf.push("Container stopped");
     }
+}
 
-    let not_stopped = all_phases
-        .iter()
-        .filter(|p| **p != ContainerPhase::Stopped)
-        .count();
+/// System: if all containers are Running, log and exit.
+pub fn check_all_running(
+    all_phases: Query<&ContainerPhase, Without<SystemEntity>>,
+    mut logs: Query<&mut LogBuffer>,
+    system_entity: Query<Entity, With<SystemEntity>>,
+    mut exit: ResMut<AppExit>,
+) {
+    if exit.0 || all_phases.is_empty() {
+        return;
+    }
+    if all_phases.iter().all(|p| *p == ContainerPhase::Running) {
+        if let Ok(sys) = system_entity.single()
+            && let Ok(mut log_buf) = logs.get_mut(sys)
+        {
+            log_buf.push("All containers ready.");
+        }
+        exit.0 = true;
+    }
+}
 
-    if not_stopped <= 1 {
+/// System: if all containers are Stopped, log and exit.
+pub fn check_all_stopped(
+    all_phases: Query<&ContainerPhase, Without<SystemEntity>>,
+    mut logs: Query<&mut LogBuffer>,
+    system_entity: Query<Entity, With<SystemEntity>>,
+    mut exit: ResMut<AppExit>,
+) {
+    if exit.0 || all_phases.is_empty() {
+        return;
+    }
+    if all_phases.iter().all(|p| *p == ContainerPhase::Stopped) {
         if let Ok(sys) = system_entity.single()
             && let Ok(mut log_buf) = logs.get_mut(sys)
         {
             log_buf.push("All containers stopped.");
         }
         exit.0 = true;
-    }
-}
-
-/// Observer: AsyncLogLine -> push a log line into the target entity's LogBuffer.
-fn handle_async_log_line(trigger: On<AsyncLogLine>, mut logs: Query<&mut LogBuffer>) {
-    let event = trigger.event();
-    if let Ok(mut log_buf) = logs.get_mut(event.entity) {
-        log_buf.push(&event.text);
     }
 }
