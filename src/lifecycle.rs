@@ -1,5 +1,6 @@
 use bevy_ecs::prelude::*;
 
+use crate::app::{App, Plugin, Update};
 use crate::backend::{ContainerBackend, ContainerRuntime};
 use crate::bridge::AppExit;
 use crate::container::*;
@@ -23,19 +24,22 @@ pub struct ShutdownComplete(pub Entity);
 #[derive(Resource, Clone)]
 pub struct Backend(pub ContainerRuntime);
 
-pub fn build_update_schedule() -> Schedule {
-    let mut schedule = Schedule::default();
-    schedule.add_systems(enforce_ordering);
-    schedule.add_systems(check_all_running);
-    schedule.add_systems(check_all_stopped);
-    schedule
+pub struct LifecyclePlugin {
+    pub backend: ContainerRuntime,
 }
 
-pub fn register_observers(world: &mut World) {
-    world.add_observer(handle_download_complete);
-    world.add_observer(handle_boot_complete);
-    world.add_observer(handle_shutdown_all);
-    world.add_observer(handle_shutdown_complete);
+impl Plugin for LifecyclePlugin {
+    fn build(self, app: &mut App) {
+        app.insert_resource(Backend(self.backend))
+            .init_resource::<MergedLogView>();
+        app.world.add_observer(handle_download_complete);
+        app.world.add_observer(handle_boot_complete);
+        app.world.add_observer(handle_shutdown_all);
+        app.world.add_observer(handle_shutdown_complete);
+        app.add_systems(Update, enforce_ordering)
+            .add_systems(Update, check_all_running)
+            .add_systems(Update, check_all_stopped);
+    }
 }
 
 /// Queries Pending containers. If all containers with a lower StartOrder

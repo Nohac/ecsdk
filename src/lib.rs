@@ -1,3 +1,4 @@
+pub mod app;
 pub mod backend;
 pub mod backend_mirror;
 pub mod backend_mock;

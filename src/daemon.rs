@@ -5,16 +5,17 @@ use bevy_ecs::prelude::*;
 use roam_stream::{HandshakeConfig, accept};
 use tokio::net::UnixListener;
 use tokio::sync::broadcast;
-use tokio::{select, signal::ctrl_c, sync::mpsc};
+use tokio::signal::ctrl_c;
 
+use crate::app::{App, Startup, Update};
 use crate::backend::ContainerRuntime;
 use crate::backend_mock::MockBackend;
-use crate::bridge::{AppExit, WorldCmd};
-use crate::task::CommandSender;
+use crate::bridge::AppExit;
 use crate::container::*;
 use crate::ipc::{ComposeDaemon, ComposeDaemonDispatcher, SOCKET_PATH};
-use crate::lifecycle::{Backend, ShutdownAll, register_observers};
+use crate::lifecycle::{LifecyclePlugin, ShutdownAll};
 use crate::protocol::{ContainerInfo, ContainerSnapshot, DaemonEvent, Phase};
+use crate::task::CommandSender;
 
 /// Shared snapshot state readable by subscribe handlers.
 #[derive(Clone, Default)]
@@ -185,16 +186,6 @@ fn broadcast_events(
     }
 }
 
-/// Build the daemon's update schedule (enforce_ordering + broadcast).
-fn build_daemon_update_schedule() -> Schedule {
-    let mut schedule = Schedule::default();
-    schedule.add_systems(crate::lifecycle::enforce_ordering.before(broadcast_events));
-    schedule.add_systems(crate::lifecycle::check_all_running.before(broadcast_events));
-    schedule.add_systems(crate::lifecycle::check_all_stopped.before(broadcast_events));
-    schedule.add_systems(broadcast_events);
-    schedule
-}
-
 /// Roam service implementation for the daemon.
 #[derive(Clone)]
 struct ComposeDaemonImpl {
@@ -246,60 +237,57 @@ pub async fn run_daemon() {
     let (broadcast_tx, _) = broadcast::channel::<DaemonEvent>(256);
     let snapshot = SharedSnapshot::default();
 
-    let (tx, mut rx) = mpsc::unbounded_channel::<WorldCmd>();
-    let cmd_sender = CommandSender::new(tx, tokio::runtime::Handle::current());
-
-    let mut world = World::new();
-    world.insert_resource(cmd_sender.clone());
-    world.init_resource::<AppExit>();
-    world.insert_resource(Backend(ContainerRuntime::from(MockBackend)));
-    world.init_resource::<MergedLogView>();
-    world.insert_resource(IpcBroadcast {
+    let mut app = App::new();
+    app.add_plugin(LifecyclePlugin {
+        backend: ContainerRuntime::from(MockBackend),
+    })
+    .insert_resource(IpcBroadcast {
         tx: broadcast_tx.clone(),
         snapshot: snapshot.clone(),
-    });
+    })
+    .add_systems(Startup, spawn_containers)
+    .add_systems(
+        Update,
+        broadcast_events
+            .after(crate::lifecycle::enforce_ordering)
+            .after(crate::lifecycle::check_all_running)
+            .after(crate::lifecycle::check_all_stopped),
+    );
 
-    register_observers(&mut world);
-
-    let mut startup = build_startup_schedule();
-    let mut update = build_daemon_update_schedule();
-
-    startup.run(&mut world);
-    update.run(&mut world);
-
-    // Start serving on Unix socket
-    let listener = UnixListener::bind(SOCKET_PATH).expect("Failed to bind daemon socket");
-    eprintln!("Daemon listening on {SOCKET_PATH}");
-
+    let cmd_sender = app.cmd_sender();
     let handler = ComposeDaemonImpl {
         event_tx: broadcast_tx,
         snapshot,
-        cmd_tx: cmd_sender,
+        cmd_tx: cmd_sender.clone(),
     };
 
-    loop {
-        select! {
-            Some(cmd) = rx.recv() => {
-                cmd(&mut world);
-                update.run(&mut world);
-                if world.resource::<AppExit>().0 { break; }
-            }
-            Ok((stream, _)) = listener.accept() => {
-                let dispatcher = ComposeDaemonDispatcher::new(handler.clone());
-                tokio::spawn(async move {
-                    match accept(stream, HandshakeConfig::default(), dispatcher).await {
-                        Ok((_handle, _incoming, driver)) => {
-                            let _ = driver.run().await;
-                        }
-                        Err(e) => eprintln!("Handshake failed: {e}"),
+    // IPC listener — task, not spawn
+    let listener = UnixListener::bind(SOCKET_PATH).expect("Failed to bind daemon socket");
+    eprintln!("Daemon listening on {SOCKET_PATH}");
+
+    let accept_handler = handler.clone();
+    app.add_task(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            let dispatcher = ComposeDaemonDispatcher::new(accept_handler.clone());
+            // Per-connection handler IS genuine concurrency — spawn is correct here
+            tokio::spawn(async move {
+                match accept(stream, HandshakeConfig::default(), dispatcher).await {
+                    Ok((_handle, _incoming, driver)) => {
+                        let _ = driver.run().await;
                     }
-                });
-            }
-            _ = ctrl_c() => {
-                handler.cmd_tx.trigger(ShutdownAll);
-            }
+                    Err(e) => eprintln!("Handshake failed: {e}"),
+                }
+            });
         }
-    }
+    });
+
+    // Ctrl+C — task, not spawn
+    app.add_task(async move {
+        ctrl_c().await.ok();
+        cmd_sender.trigger(ShutdownAll);
+    });
+
+    app.run().await;
 
     // Cleanup
     let _ = std::fs::remove_file(SOCKET_PATH);

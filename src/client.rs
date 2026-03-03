@@ -1,56 +1,23 @@
 use std::collections::HashMap;
 
 use bevy_ecs::prelude::*;
-use crossterm::event::{Event, EventStream, KeyCode, KeyModifiers};
-use futures_util::StreamExt;
+use crossterm::event::{Event, KeyCode, KeyModifiers};
 use roam_stream::{HandshakeConfig, NoDispatcher, connect};
 use tokio::sync::broadcast;
-use tokio::{select, signal::ctrl_c, sync::mpsc};
+use tokio::{select, signal::ctrl_c};
 
+use crate::app::App;
 use crate::backend::ContainerRuntime;
 use crate::backend_mirror::MirrorBackend;
-use crate::bridge::{AppExit, WorldCmd};
-use crate::task::CommandSender;
+use crate::bridge::AppExit;
 use crate::container::*;
 use crate::ipc::{ComposeDaemonClient, DaemonConnector, SOCKET_PATH};
-use crate::lifecycle::{Backend, register_observers};
+use crate::lifecycle::LifecyclePlugin;
 use crate::protocol::DaemonEvent;
-use crate::render::{RenderMode, TerminalGuard, TerminalSize, build_render_schedule};
-
-fn forward_daemon_event(
-    event: Option<DaemonEvent>,
-    broadcast_tx: &broadcast::Sender<DaemonEvent>,
-    cmd_sender: &CommandSender,
-) {
-    match event {
-        Some(event) => {
-            if matches!(event, DaemonEvent::Exit) {
-                cmd_sender.send(|world: &mut World| world.resource_mut::<AppExit>().0 = true);
-            }
-            let _ = broadcast_tx.send(event);
-        }
-        None => {
-            // Stream ended — daemon disconnected
-            cmd_sender.send(|world: &mut World| world.resource_mut::<AppExit>().0 = true);
-        }
-    }
-}
-
-async fn next_term_event(events: &mut Option<EventStream>) -> Option<Result<Event, std::io::Error>> {
-    match events {
-        Some(stream) => stream.next().await,
-        None => std::future::pending().await,
-    }
-}
+use crate::render::{CrosstermPlugin, RenderMode};
 
 /// Run the client: connect to daemon, mirror its lifecycle locally, render.
 pub async fn run_client(mode: RenderMode) {
-    // RAII: terminal is restored on drop (early return, panic, etc.)
-    let _terminal_guard = match mode {
-        RenderMode::Tui => Some(TerminalGuard::new()),
-        RenderMode::Plain => None,
-    };
-
     // Connect to daemon
     let connector = DaemonConnector::new(SOCKET_PATH);
     let roam_client = connect(connector, HandshakeConfig::default(), NoDispatcher);
@@ -61,7 +28,7 @@ pub async fn run_client(mode: RenderMode) {
 
     // Start subscription — polled in select loop, no spawn needed
     let subscribe_client = client.clone();
-    let mut subscribe_task = Box::pin(async move {
+    let mut subscribe_fut = Box::pin(async move {
         let _ = subscribe_client.subscribe(event_tx).await;
     });
 
@@ -76,7 +43,7 @@ pub async fn run_client(mode: RenderMode) {
                 }
             }
         }
-        _ = &mut subscribe_task => {
+        _ = &mut subscribe_fut => {
             eprintln!("Subscribe ended before snapshot");
             return;
         }
@@ -93,22 +60,27 @@ pub async fn run_client(mode: RenderMode) {
         image_to_name,
     };
 
-    // Set up ECS world with full lifecycle (same as daemon, but with MirrorBackend)
-    let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<WorldCmd>();
-    let cmd_sender = CommandSender::new(cmd_tx, tokio::runtime::Handle::current());
+    let mut app = App::new();
 
-    let mut world = World::new();
-    world.insert_resource(cmd_sender.clone());
-    world.insert_resource(TerminalSize::query_now());
-    world.init_resource::<AppExit>();
-    world.init_resource::<MergedLogView>();
-    world.insert_resource(Backend(ContainerRuntime::from(mirror)));
+    let shutdown_client = client.clone();
+    app.add_plugin(LifecyclePlugin {
+        backend: ContainerRuntime::from(mirror),
+    })
+    .add_plugin(CrosstermPlugin::new(mode).on_event(move |event, _cmd| {
+        let c = shutdown_client.clone();
+        async move {
+            if let Event::Key(key) = event
+                && key.code == KeyCode::Char('c')
+                && key.modifiers.contains(KeyModifiers::CONTROL)
+            {
+                let _ = c.shutdown().await;
+            }
+        }
+    }));
 
-    register_observers(&mut world);
-
-    // Spawn containers from snapshot (all Pending — lifecycle replays from start)
+    // Spawn entities from snapshot
     for c in &snapshot {
-        world.spawn((
+        app.world.spawn((
             ContainerName(c.info.name.clone()),
             ImageRef(c.info.image.clone()),
             StartOrder(c.info.order),
@@ -116,57 +88,48 @@ pub async fn run_client(mode: RenderMode) {
             LogBuffer::default(),
         ));
     }
-    world.spawn((
+    app.world.spawn((
         ContainerName("[system]".to_string()),
         LogBuffer::default(),
         SystemEntity,
     ));
 
-    let mut update = crate::lifecycle::build_update_schedule();
-    let mut render = build_render_schedule(mode);
+    let cmd_sender = app.cmd_sender();
 
-    // Kick off: first update lets enforce_ordering start the lifecycle
-    update.run(&mut world);
-    render.run(&mut world);
-
-    // Terminal events — only created in Tui mode
-    let mut term_events = match mode {
-        RenderMode::Tui => Some(EventStream::new()),
-        RenderMode::Plain => None,
-    };
-
-    loop {
-        select! {
-            Some(cmd) = cmd_rx.recv() => {
-                cmd(&mut world);
-                update.run(&mut world);
-                render.run(&mut world);
-                if world.resource::<AppExit>().0 { break; }
-            }
-            result = event_rx.recv() => {
-                forward_daemon_event(result.ok().flatten(), &broadcast_tx, &cmd_sender);
-            }
-            Some(Ok(event)) = next_term_event(&mut term_events) => {
-                match event {
-                    Event::Resize(cols, rows) => {
-                        cmd_sender.send(move |world: &mut World| {
-                            world.resource_mut::<TerminalSize>().update(cols, rows);
-                        });
+    // Daemon event forwarder — task, not spawn
+    let fwd_sender = cmd_sender.clone();
+    app.add_task(async move {
+        let mut subscribe_fut = subscribe_fut;
+        loop {
+            select! {
+                result = event_rx.recv() => {
+                    match result.ok().flatten() {
+                        Some(event) => {
+                            if matches!(event, DaemonEvent::Exit) {
+                                fwd_sender.send(|w: &mut World| w.resource_mut::<AppExit>().0 = true);
+                            }
+                            let _ = broadcast_tx.send(event);
+                        }
+                        None => {
+                            fwd_sender.send(|w: &mut World| w.resource_mut::<AppExit>().0 = true);
+                            break;
+                        }
                     }
-                    Event::Key(key)
-                        if key.code == KeyCode::Char('c')
-                            && key.modifiers.contains(KeyModifiers::CONTROL) =>
-                    {
-                        let _ = client.shutdown().await;
-                    }
-                    _ => {}
+                }
+                _ = &mut subscribe_fut => {
+                    fwd_sender.send(|w: &mut World| w.resource_mut::<AppExit>().0 = true);
+                    break;
                 }
             }
-            _ = ctrl_c() => {
-                let _ = client.shutdown().await;
-            }
-            _ = &mut subscribe_task => break,
         }
-    }
+    });
 
+    // Ctrl+C — task, not spawn
+    let shutdown_client = client.clone();
+    app.add_task(async move {
+        ctrl_c().await.ok();
+        let _ = shutdown_client.shutdown().await;
+    });
+
+    app.run().await;
 }

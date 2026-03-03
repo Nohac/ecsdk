@@ -86,7 +86,7 @@ impl TuiRenderState {
 }
 
 /// RAII guard that initializes the terminal on creation and restores it on drop.
-#[derive(Default)]
+#[derive(Resource, Default)]
 pub struct TerminalGuard;
 
 impl TerminalGuard {

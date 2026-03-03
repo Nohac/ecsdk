@@ -140,13 +140,7 @@ pub fn build_merged_log_view(
     view.entries.sort_by_key(|e| e.line.timestamp);
 }
 
-pub fn build_startup_schedule() -> Schedule {
-    let mut schedule = Schedule::default();
-    schedule.add_systems(spawn_containers);
-    schedule
-}
-
-fn spawn_containers(mut commands: Commands) {
+pub fn spawn_containers(mut commands: Commands) {
     let containers = [
         ("postgres", "postgres:16", 0),
         ("redis", "redis:7", 0),
