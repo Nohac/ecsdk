@@ -14,17 +14,41 @@ use crate::container::*;
 use crate::ipc::{ComposeDaemonClient, DaemonConnector, SOCKET_PATH};
 use crate::lifecycle::{Backend, register_observers};
 use crate::protocol::DaemonEvent;
-use crate::render::{
-    RenderMode, TerminalSize, build_render_schedule, install_panic_hook, terminal_init,
-    terminal_teardown,
-};
+use crate::render::{RenderMode, TerminalGuard, TerminalSize, build_render_schedule};
+
+fn forward_daemon_event(
+    event: Option<DaemonEvent>,
+    broadcast_tx: &broadcast::Sender<DaemonEvent>,
+    event_sender: &EventSender,
+) {
+    match event {
+        Some(event) => {
+            if matches!(event, DaemonEvent::Exit) {
+                event_sender.send(|world| world.resource_mut::<AppExit>().0 = true);
+            }
+            let _ = broadcast_tx.send(event);
+        }
+        None => {
+            // Stream ended — daemon disconnected
+            event_sender.send(|world| world.resource_mut::<AppExit>().0 = true);
+        }
+    }
+}
+
+async fn next_term_event(events: &mut Option<EventStream>) -> Option<Result<Event, std::io::Error>> {
+    match events {
+        Some(stream) => stream.next().await,
+        None => std::future::pending().await,
+    }
+}
 
 /// Run the client: connect to daemon, mirror its lifecycle locally, render.
 pub async fn run_client(mode: RenderMode) {
-    if mode == RenderMode::Tui {
-        install_panic_hook();
-        terminal_init();
-    }
+    // RAII: terminal is restored on drop (early return, panic, etc.)
+    let _terminal_guard = match mode {
+        RenderMode::Tui => Some(TerminalGuard::new()),
+        RenderMode::Plain => None,
+    };
 
     // Connect to daemon
     let connector = DaemonConnector::new(SOCKET_PATH);
@@ -34,19 +58,25 @@ pub async fn run_client(mode: RenderMode) {
     // Set up event channel for subscribe stream
     let (event_tx, mut event_rx) = roam::channel::<DaemonEvent>();
 
+    // Start subscription — polled in select loop, no spawn needed
     let subscribe_client = client.clone();
-    tokio::spawn(async move {
+    let mut subscribe_task = Box::pin(async move {
         let _ = subscribe_client.subscribe(event_tx).await;
     });
 
-    // Wait for snapshot
-    let snapshot = match event_rx.recv().await {
-        Ok(Some(DaemonEvent::Snapshot(snapshot))) => snapshot,
-        _ => {
-            if mode == RenderMode::Tui {
-                terminal_teardown();
+    // Wait for snapshot (poll subscribe to drive the connection)
+    let snapshot = select! {
+        result = event_rx.recv() => {
+            match result {
+                Ok(Some(DaemonEvent::Snapshot(snapshot))) => snapshot,
+                _ => {
+                    eprintln!("Failed to receive snapshot from daemon");
+                    return;
+                }
             }
-            eprintln!("Failed to receive snapshot from daemon");
+        }
+        _ = &mut subscribe_task => {
+            eprintln!("Subscribe ended before snapshot");
             return;
         }
     };
@@ -99,34 +129,24 @@ pub async fn run_client(mode: RenderMode) {
     update.run(&mut world);
     render.run(&mut world);
 
-    // Forwarding task: roam → broadcast (+ handle Exit/disconnect)
-    let fwd_sender = event_sender.clone();
-    tokio::spawn(async move {
-        while let Ok(Some(event)) = event_rx.recv().await {
-            if matches!(event, DaemonEvent::Exit) {
-                fwd_sender.send(|world| world.resource_mut::<AppExit>().0 = true);
-            }
-            let _ = broadcast_tx.send(event);
-        }
-        // Stream ended — daemon disconnected
-        fwd_sender.send(|world| world.resource_mut::<AppExit>().0 = true);
-    });
-
-    // Terminal events
-    let mut term_events = EventStream::new();
+    // Terminal events — only created in Tui mode
+    let mut term_events = match mode {
+        RenderMode::Tui => Some(EventStream::new()),
+        RenderMode::Plain => None,
+    };
 
     loop {
         select! {
-            // Single render path: all world mutations arrive here
             Some(cmd) = cmd_rx.recv() => {
                 cmd(&mut world);
                 update.run(&mut world);
                 render.run(&mut world);
                 if world.resource::<AppExit>().0 { break; }
             }
-            // Resize flows through cmd channel → rendered in the arm above
-            // Ctrl+C triggers daemon shutdown directly (no render needed)
-            Some(Ok(event)) = term_events.next(), if mode == RenderMode::Tui => {
+            result = event_rx.recv() => {
+                forward_daemon_event(result.ok().flatten(), &broadcast_tx, &event_sender);
+            }
+            Some(Ok(event)) = next_term_event(&mut term_events) => {
                 match event {
                     Event::Resize(cols, rows) => {
                         event_sender.send(move |world| {
@@ -142,13 +162,11 @@ pub async fn run_client(mode: RenderMode) {
                     _ => {}
                 }
             }
-            _ = ctrl_c(), if mode == RenderMode::Plain => {
+            _ = ctrl_c() => {
                 let _ = client.shutdown().await;
             }
+            _ = &mut subscribe_task => break,
         }
     }
 
-    if mode == RenderMode::Tui {
-        terminal_teardown();
-    }
 }

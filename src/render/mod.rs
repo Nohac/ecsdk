@@ -1,7 +1,7 @@
 mod plain;
 mod tui;
 
-pub use tui::{install_panic_hook, terminal_init, terminal_teardown};
+pub use tui::TerminalGuard;
 
 use bevy_ecs::prelude::*;
 use clap::ValueEnum;

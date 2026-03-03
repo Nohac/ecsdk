@@ -85,36 +85,39 @@ pub fn enforce_ordering(
             handle.0.spawn(async move {
                 let (progress_tx, mut progress_rx) =
                     tokio::sync::mpsc::unbounded_channel::<crate::backend::PullProgress>();
-                let (log_tx, mut log_rx) = tokio::sync::mpsc::unbounded_channel();
+                let (log_tx, log_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
 
-                // Forward progress updates to ECS
-                let tx2 = tx.clone();
-                let progress_fwd = tokio::spawn(async move {
-                    while let Some(p) = progress_rx.recv().await {
-                        let tx3 = tx2.clone();
-                        tx3.send(move |world| {
-                            if let Some(mut dp) = world.get_mut::<DownloadProgress>(entity) {
-                                dp.downloaded = p.downloaded;
-                                dp.total = p.total;
-                            }
-                        });
-                    }
-                });
-
-                // Forward log lines to ECS
-                let tx2 = tx.clone();
-                let log_fwd = tokio::spawn(async move {
-                    while let Some(text) = log_rx.recv().await {
-                        tx2.trigger(AsyncLogLine { entity, text });
-                    }
-                });
-
-                let _ = backend.pull_image(&image_name, progress_tx, log_tx).await;
-                let _ = progress_fwd.await;
-                let _ = log_fwd.await;
+                let tx_progress = tx.clone();
+                let tx_log = tx.clone();
+                let _ = tokio::join!(
+                    backend.pull_image(&image_name, progress_tx, log_tx),
+                    async move {
+                        while let Some(p) = progress_rx.recv().await {
+                            tx_progress.send(move |world| {
+                                if let Some(mut dp) =
+                                    world.get_mut::<DownloadProgress>(entity)
+                                {
+                                    dp.downloaded = p.downloaded;
+                                    dp.total = p.total;
+                                }
+                            });
+                        }
+                    },
+                    forward_logs(log_rx, entity, tx_log),
+                );
                 tx.trigger(DownloadComplete(entity));
             });
         }
+    }
+}
+
+async fn forward_logs(
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<String>,
+    entity: Entity,
+    tx: EventSender,
+) {
+    while let Some(text) = rx.recv().await {
+        tx.trigger(AsyncLogLine { entity, text });
     }
 }
 
@@ -140,18 +143,13 @@ fn handle_download_complete(
     let backend = backend.0.clone();
     let tx = tx.clone();
     handle.0.spawn(async move {
-        let (log_tx, mut log_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (log_tx, log_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
 
-        // Forward log lines to ECS
-        let tx2 = tx.clone();
-        let log_fwd = tokio::spawn(async move {
-            while let Some(text) = log_rx.recv().await {
-                tx2.trigger(AsyncLogLine { entity, text });
-            }
-        });
-
-        let _ = backend.boot_container(&container_name, log_tx).await;
-        let _ = log_fwd.await;
+        let tx_log = tx.clone();
+        let _ = tokio::join!(
+            backend.boot_container(&container_name, log_tx),
+            forward_logs(log_rx, entity, tx_log),
+        );
         tx.trigger(BootComplete(entity));
     });
 }

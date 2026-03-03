@@ -85,23 +85,33 @@ impl TuiRenderState {
     }
 }
 
-pub fn install_panic_hook() {
-    let original = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
+/// RAII guard that initializes the terminal on creation and restores it on drop.
+#[derive(Default)]
+pub struct TerminalGuard;
+
+impl TerminalGuard {
+    pub fn new() -> Self {
+        let original = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            terminal_teardown();
+            original(info);
+        }));
+        let mut out = stdout();
+        let _ = enable_raw_mode();
+        let _ = out.execute(EnterAlternateScreen);
+        let _ = out.execute(Hide);
+        let _ = out.execute(DisableLineWrap);
+        Self
+    }
+}
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
         terminal_teardown();
-        original(info);
-    }));
+    }
 }
 
-pub fn terminal_init() {
-    let mut out = stdout();
-    let _ = enable_raw_mode();
-    let _ = out.execute(EnterAlternateScreen);
-    let _ = out.execute(Hide);
-    let _ = out.execute(DisableLineWrap);
-}
-
-pub fn terminal_teardown() {
+fn terminal_teardown() {
     let mut out = stdout();
     reset_scroll_region(&mut out);
     let _ = out.execute(EnableLineWrap);

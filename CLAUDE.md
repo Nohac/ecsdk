@@ -21,7 +21,7 @@ Experimental project exploring Bevy ECS as a framework for managing entities and
 
 ## Feedback Loop
 
-When the user points out bad practices, patterns they dislike, or corrections to my approach, immediately record them in the auto-memory file `memory/antipatterns.md`. Review that file before starting any task.
+Any time the user expresses a preference about code style, architecture, or patterns — whether as a direct correction, a suggestion during review, or an offhand remark — immediately record it in the auto-memory file `memory/antipatterns.md`. This includes "you should do X instead" comments even when given mid-task. Review that file before starting any task.
 
 ## Key Dependencies
 
