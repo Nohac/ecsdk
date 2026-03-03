@@ -4,89 +4,22 @@ use bevy_ecs::prelude::*;
 use crossterm::event::{Event, EventStream, KeyCode, KeyModifiers};
 use futures_util::StreamExt;
 use roam_stream::{HandshakeConfig, NoDispatcher, connect};
+use tokio::sync::broadcast;
 use tokio::{select, signal::ctrl_c, sync::mpsc};
 
-use crate::bridge::{AppExit, EventSender, WorldCmd};
+use crate::backend::ContainerRuntime;
+use crate::backend_mirror::MirrorBackend;
+use crate::bridge::{AppExit, EventSender, TokioHandle, WorldCmd};
 use crate::container::*;
 use crate::ipc::{ComposeDaemonClient, DaemonConnector, SOCKET_PATH};
-use crate::protocol::{ContainerId, DaemonEvent};
+use crate::lifecycle::{Backend, register_observers};
+use crate::protocol::DaemonEvent;
 use crate::render::{
     RenderMode, TerminalSize, build_render_schedule, install_panic_hook, terminal_init,
     terminal_teardown,
 };
 
-/// Apply a daemon event to the local ECS world.
-fn apply_daemon_event(
-    world: &mut World,
-    id_map: &mut HashMap<ContainerId, Entity>,
-    event: DaemonEvent,
-) {
-    match event {
-        DaemonEvent::Snapshot(containers) => {
-            for c in containers {
-                let phase: ContainerPhase = c.phase.into();
-                let mut entity_cmd = world.spawn((
-                    ContainerName(c.info.name.clone()),
-                    ImageRef(c.info.image),
-                    StartOrder(c.info.order),
-                    phase,
-                    LogBuffer::default(),
-                ));
-                if c.total > 0 {
-                    entity_cmd.insert(DownloadProgress {
-                        downloaded: c.downloaded,
-                        total: c.total,
-                    });
-                }
-                let e = entity_cmd.id();
-                id_map.insert(c.info.id, e);
-            }
-            // System entity for global messages
-            let sys = world
-                .spawn((
-                    ContainerName("[system]".to_string()),
-                    LogBuffer::default(),
-                    SystemEntity,
-                ))
-                .id();
-            id_map.insert("[system]".to_string(), sys);
-        }
-        DaemonEvent::PhaseChanged { id, phase } => {
-            if let Some(&entity) = id_map.get(&id) {
-                let cp: ContainerPhase = phase.into();
-                world.entity_mut(entity).insert(cp);
-            }
-        }
-        DaemonEvent::Progress {
-            id,
-            downloaded,
-            total,
-        } => {
-            if let Some(&entity) = id_map.get(&id) {
-                if let Some(mut dp) = world.get_mut::<DownloadProgress>(entity) {
-                    dp.downloaded = downloaded;
-                    dp.total = total;
-                } else {
-                    world
-                        .entity_mut(entity)
-                        .insert(DownloadProgress { downloaded, total });
-                }
-            }
-        }
-        DaemonEvent::Log { id, text } => {
-            if let Some(&entity) = id_map.get(&id)
-                && let Some(mut log_buf) = world.get_mut::<LogBuffer>(entity)
-            {
-                log_buf.push(text);
-            }
-        }
-        DaemonEvent::Exit => {
-            world.resource_mut::<AppExit>().0 = true;
-        }
-    }
-}
-
-/// Run the client: connect to daemon, subscribe to events, render locally.
+/// Run the client: connect to daemon, mirror its lifecycle locally, render.
 pub async fn run_client(mode: RenderMode) {
     if mode == RenderMode::Tui {
         install_panic_hook();
@@ -101,53 +34,104 @@ pub async fn run_client(mode: RenderMode) {
     // Set up event channel for subscribe stream
     let (event_tx, mut event_rx) = roam::channel::<DaemonEvent>();
 
-    // Fire off the subscribe call (runs until stream ends)
     let subscribe_client = client.clone();
     tokio::spawn(async move {
         let _ = subscribe_client.subscribe(event_tx).await;
     });
 
-    // Local ECS world — renderers only, no lifecycle
+    // Wait for snapshot
+    let snapshot = match event_rx.recv().await {
+        Ok(Some(DaemonEvent::Snapshot(snapshot))) => snapshot,
+        _ => {
+            if mode == RenderMode::Tui {
+                terminal_teardown();
+            }
+            eprintln!("Failed to receive snapshot from daemon");
+            return;
+        }
+    };
+
+    // Build MirrorBackend from snapshot
+    let (broadcast_tx, _) = broadcast::channel::<DaemonEvent>(256);
+    let image_to_name: HashMap<String, String> = snapshot
+        .iter()
+        .map(|c| (c.info.image.clone(), c.info.name.clone()))
+        .collect();
+    let mirror = MirrorBackend {
+        events: broadcast_tx.clone(),
+        image_to_name,
+    };
+
+    // Set up ECS world with full lifecycle (same as daemon, but with MirrorBackend)
     let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<WorldCmd>();
+    let event_sender = EventSender(cmd_tx);
 
     let mut world = World::new();
-    world.insert_resource(EventSender(cmd_tx));
+    world.insert_resource(event_sender.clone());
+    world.insert_resource(TokioHandle(tokio::runtime::Handle::current()));
     world.insert_resource(TerminalSize::query_now());
     world.init_resource::<AppExit>();
     world.init_resource::<MergedLogView>();
+    world.insert_resource(Backend(ContainerRuntime::from(mirror)));
 
+    register_observers(&mut world);
+
+    // Spawn containers from snapshot (all Pending — lifecycle replays from start)
+    for c in &snapshot {
+        world.spawn((
+            ContainerName(c.info.name.clone()),
+            ImageRef(c.info.image.clone()),
+            StartOrder(c.info.order),
+            ContainerPhase::Pending,
+            LogBuffer::default(),
+        ));
+    }
+    world.spawn((
+        ContainerName("[system]".to_string()),
+        LogBuffer::default(),
+        SystemEntity,
+    ));
+
+    let mut update = crate::lifecycle::build_update_schedule();
     let mut render = build_render_schedule(mode);
-    let mut id_map: HashMap<ContainerId, Entity> = HashMap::new();
 
+    // Kick off: first update lets enforce_ordering start the lifecycle
+    update.run(&mut world);
+    render.run(&mut world);
+
+    // Forwarding task: roam → broadcast (+ handle Exit/disconnect)
+    let fwd_sender = event_sender.clone();
+    tokio::spawn(async move {
+        while let Ok(Some(event)) = event_rx.recv().await {
+            if matches!(event, DaemonEvent::Exit) {
+                fwd_sender.send(|world| world.resource_mut::<AppExit>().0 = true);
+            }
+            let _ = broadcast_tx.send(event);
+        }
+        // Stream ended — daemon disconnected
+        fwd_sender.send(|world| world.resource_mut::<AppExit>().0 = true);
+    });
+
+    // Terminal events
     let mut term_events = EventStream::new();
 
     loop {
         select! {
-            // Arm 1: IPC events from daemon
-            result = event_rx.recv() => {
-                match result {
-                    Ok(Some(event)) => {
-                        apply_daemon_event(&mut world, &mut id_map, event);
-                        world.flush();
-                        render.run(&mut world);
-                        if world.resource::<AppExit>().0 { break; }
-                    }
-                    // Stream ended — daemon disconnected
-                    _ => break,
-                }
-            }
-            // Arm 2: Local WorldCmd (e.g. terminal resize)
+            // Single render path: all world mutations arrive here
             Some(cmd) = cmd_rx.recv() => {
                 cmd(&mut world);
+                update.run(&mut world);
                 render.run(&mut world);
                 if world.resource::<AppExit>().0 { break; }
             }
-            // Arm 3: Terminal events (TUI mode — raw mode captures Ctrl+C as key event)
+            // Resize flows through cmd channel → rendered in the arm above
+            // Ctrl+C triggers daemon shutdown directly (no render needed)
             Some(Ok(event)) = term_events.next(), if mode == RenderMode::Tui => {
                 match event {
                     Event::Resize(cols, rows) => {
-                        world.resource_mut::<TerminalSize>().update(cols, rows);
-                        render.run(&mut world);
+                        event_sender.send(move |world| {
+                            world.resource_mut::<TerminalSize>().update(cols, rows);
+                        });
                     }
                     Event::Key(key)
                         if key.code == KeyCode::Char('c')
@@ -158,7 +142,6 @@ pub async fn run_client(mode: RenderMode) {
                     _ => {}
                 }
             }
-            // Arm 4: Ctrl+C (plain mode — SIGINT delivered normally)
             _ = ctrl_c(), if mode == RenderMode::Plain => {
                 let _ = client.shutdown().await;
             }

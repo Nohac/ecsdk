@@ -27,15 +27,94 @@ pub struct IpcBroadcast {
 }
 
 /// Tracked state per container for change detection.
-pub struct TrackedContainer {
+struct TrackedContainer {
     phase: ContainerPhase,
     downloaded: u64,
     log_count: usize,
 }
 
+impl TrackedContainer {
+    /// Diff current state against tracked, returning events for any changes.
+    /// Updates tracked state in place.
+    fn diff(
+        &mut self,
+        id: &str,
+        phase: ContainerPhase,
+        progress: Option<&DownloadProgress>,
+        log_buf: &LogBuffer,
+    ) -> Vec<DaemonEvent> {
+        let mut events = Vec::new();
+
+        if self.phase != phase {
+            events.push(DaemonEvent::PhaseChanged {
+                id: id.to_string(),
+                phase: Phase::from(phase),
+            });
+            self.phase = phase;
+        }
+
+        if let Some(prog) = progress {
+            if prog.downloaded != self.downloaded {
+                events.push(DaemonEvent::Progress {
+                    id: id.to_string(),
+                    downloaded: prog.downloaded,
+                    total: prog.total,
+                });
+            }
+            self.downloaded = prog.downloaded;
+        } else {
+            self.downloaded = 0;
+        }
+
+        for line in &log_buf.lines[self.log_count..] {
+            events.push(DaemonEvent::Log {
+                id: id.to_string(),
+                text: line.text.clone(),
+            });
+        }
+        self.log_count = log_buf.lines.len();
+
+        events
+    }
+
+    /// Diff logs only (for system entity).
+    fn diff_logs(&mut self, id: &str, log_buf: &LogBuffer) -> Vec<DaemonEvent> {
+        let mut events = Vec::new();
+        for line in &log_buf.lines[self.log_count..] {
+            events.push(DaemonEvent::Log {
+                id: id.to_string(),
+                text: line.text.clone(),
+            });
+        }
+        self.log_count = log_buf.lines.len();
+        events
+    }
+}
+
+fn build_container_snapshot(
+    name: &str,
+    image: &str,
+    order: u32,
+    phase: ContainerPhase,
+    progress: Option<&DownloadProgress>,
+) -> ContainerSnapshot {
+    let (dl, total) = progress.map(|p| (p.downloaded, p.total)).unwrap_or((0, 0));
+    ContainerSnapshot {
+        info: ContainerInfo {
+            id: name.to_string(),
+            name: name.to_string(),
+            image: image.to_string(),
+            order,
+        },
+        phase: Phase::from(phase),
+        downloaded: dl,
+        total,
+    }
+}
+
 /// ECS system that diffs container state each tick and broadcasts changes.
 #[allow(clippy::type_complexity)]
-pub fn broadcast_events(
+fn broadcast_events(
     containers: Query<
         (
             Entity,
@@ -53,89 +132,47 @@ pub fn broadcast_events(
     exit: Res<AppExit>,
     mut tracked: Local<HashMap<String, TrackedContainer>>,
 ) {
-    // Build snapshot and detect changes
     let mut snapshot = Vec::new();
 
     for (_entity, name, image, order, phase, progress, log_buf) in &containers {
         let id = name.0.clone();
-        let (dl, total) = progress.map(|p| (p.downloaded, p.total)).unwrap_or((0, 0));
 
-        snapshot.push(ContainerSnapshot {
-            info: ContainerInfo {
-                id: id.clone(),
-                name: name.0.clone(),
-                image: image.0.clone(),
-                order: order.0,
-            },
-            phase: Phase::from(*phase),
-            downloaded: dl,
-            total,
-        });
+        snapshot.push(build_container_snapshot(
+            &name.0, &image.0, order.0, *phase, progress,
+        ));
 
-        if let Some(prev) = tracked.get(&id) {
-            if prev.phase != *phase {
-                let _ = broadcast.tx.send(DaemonEvent::PhaseChanged {
-                    id: id.clone(),
-                    phase: Phase::from(*phase),
-                });
-            }
-
-            if let Some(prog) = progress
-                && prog.downloaded != prev.downloaded
-            {
-                let _ = broadcast.tx.send(DaemonEvent::Progress {
-                    id: id.clone(),
-                    downloaded: prog.downloaded,
-                    total: prog.total,
-                });
-            }
-
-            if log_buf.lines.len() > prev.log_count {
-                for line in &log_buf.lines[prev.log_count..] {
-                    let _ = broadcast.tx.send(DaemonEvent::Log {
-                        id: id.clone(),
-                        text: line.text.clone(),
-                    });
-                }
-            }
+        let events = if let Some(prev) = tracked.get_mut(&id) {
+            prev.diff(&id, *phase, progress, log_buf)
         } else {
-            // New container — emit its current phase
-            let _ = broadcast.tx.send(DaemonEvent::PhaseChanged {
+            tracked.insert(
+                id.clone(),
+                TrackedContainer {
+                    phase: *phase,
+                    downloaded: progress.map(|p| p.downloaded).unwrap_or(0),
+                    log_count: log_buf.lines.len(),
+                },
+            );
+            vec![DaemonEvent::PhaseChanged {
                 id: id.clone(),
                 phase: Phase::from(*phase),
-            });
-        }
+            }]
+        };
 
-        tracked.insert(
-            id,
-            TrackedContainer {
-                phase: *phase,
-                downloaded: dl,
-                log_count: log_buf.lines.len(),
-            },
-        );
+        for event in events {
+            let _ = broadcast.tx.send(event);
+        }
     }
 
-    // System entity logs
     for (_entity, name, log_buf) in &system_query {
         let id = name.0.clone();
-        let prev_count = tracked.get(&id).map(|t| t.log_count).unwrap_or(0);
-        if log_buf.lines.len() > prev_count {
-            for line in &log_buf.lines[prev_count..] {
-                let _ = broadcast.tx.send(DaemonEvent::Log {
-                    id: id.clone(),
-                    text: line.text.clone(),
-                });
-            }
+        let prev = tracked.entry(id.clone()).or_insert(TrackedContainer {
+            phase: ContainerPhase::Pending,
+            downloaded: 0,
+            log_count: 0,
+        });
+        for event in prev.diff_logs(&id, log_buf) {
+            let _ = broadcast.tx.send(event);
         }
-        tracked
-            .entry(id)
-            .and_modify(|t| t.log_count = log_buf.lines.len())
-            .or_insert(TrackedContainer {
-                phase: ContainerPhase::Pending,
-                downloaded: 0,
-                log_count: log_buf.lines.len(),
-            });
     }
 
     // Update shared snapshot

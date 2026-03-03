@@ -1,6 +1,7 @@
 use enum_dispatch::enum_dispatch;
 use tokio::sync::mpsc;
 
+use crate::backend_mirror::MirrorBackend;
 use crate::backend_mock::MockBackend;
 
 pub struct PullProgress {
@@ -34,4 +35,5 @@ pub trait ContainerBackend {
 #[enum_dispatch(ContainerBackend)]
 pub enum ContainerRuntime {
     Mock(MockBackend),
+    Mirror(MirrorBackend),
 }
