@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
 
 use bevy_ecs::prelude::*;
 use roam_stream::{HandshakeConfig, accept};
@@ -7,25 +6,21 @@ use tokio::net::UnixListener;
 use tokio::sync::broadcast;
 use tokio::signal::ctrl_c;
 
-use crate::app::{App, Startup, Update};
+use crate::app::App;
+use crate::app::Update;
 use crate::backend::ContainerRuntime;
 use crate::backend_mock::MockBackend;
 use crate::bridge::AppExit;
 use crate::container::*;
 use crate::ipc::{ComposeDaemon, ComposeDaemonDispatcher, SOCKET_PATH};
-use crate::lifecycle::{LifecyclePlugin, ShutdownAll};
+use crate::lifecycle::{Backend, LifecyclePlugin, ShutdownAll};
 use crate::protocol::{ContainerInfo, ContainerSnapshot, DaemonEvent, Phase};
 use crate::task::CommandSender;
-
-/// Shared snapshot state readable by subscribe handlers.
-#[derive(Clone, Default)]
-pub struct SharedSnapshot(pub Arc<Mutex<Vec<ContainerSnapshot>>>);
 
 /// Resource holding the broadcast channel for IPC events.
 #[derive(Resource)]
 pub struct IpcBroadcast {
     pub tx: broadcast::Sender<DaemonEvent>,
-    pub snapshot: SharedSnapshot,
 }
 
 /// Tracked state per container for change detection.
@@ -93,25 +88,33 @@ impl TrackedContainer {
     }
 }
 
-fn build_container_snapshot(
-    name: &str,
-    image: &str,
-    order: u32,
-    phase: ContainerPhase,
-    progress: Option<&DownloadProgress>,
-) -> ContainerSnapshot {
-    let (dl, total) = progress.map(|p| (p.downloaded, p.total)).unwrap_or((0, 0));
-    ContainerSnapshot {
-        info: ContainerInfo {
-            id: name.to_string(),
-            name: name.to_string(),
-            image: image.to_string(),
-            order,
-        },
-        phase: Phase::from(phase),
-        downloaded: dl,
-        total,
-    }
+/// Build a full snapshot by querying the ECS world directly.
+fn build_snapshot(world: &mut World) -> Vec<ContainerSnapshot> {
+    let mut query = world.query_filtered::<(
+        &ContainerName,
+        &ImageRef,
+        &StartOrder,
+        &ContainerPhase,
+        Option<&DownloadProgress>,
+    ), Without<SystemEntity>>();
+
+    query
+        .iter(world)
+        .map(|(name, image, order, phase, progress)| {
+            let (dl, total) = progress.map(|p| (p.downloaded, p.total)).unwrap_or((0, 0));
+            ContainerSnapshot {
+                info: ContainerInfo {
+                    id: name.0.clone(),
+                    name: name.0.clone(),
+                    image: image.0.clone(),
+                    order: order.0,
+                },
+                phase: Phase::from(*phase),
+                downloaded: dl,
+                total,
+            }
+        })
+        .collect()
 }
 
 /// ECS system that diffs container state each tick and broadcasts changes.
@@ -119,29 +122,20 @@ fn build_container_snapshot(
 fn broadcast_events(
     containers: Query<
         (
-            Entity,
             &ContainerName,
-            &ImageRef,
-            &StartOrder,
             &ContainerPhase,
             Option<&DownloadProgress>,
             &LogBuffer,
         ),
         Without<SystemEntity>,
     >,
-    system_query: Query<(Entity, &ContainerName, &LogBuffer), With<SystemEntity>>,
+    system_query: Query<(&ContainerName, &LogBuffer), With<SystemEntity>>,
     broadcast: Res<IpcBroadcast>,
     exit: Res<AppExit>,
     mut tracked: Local<HashMap<String, TrackedContainer>>,
 ) {
-    let mut snapshot = Vec::new();
-
-    for (_entity, name, image, order, phase, progress, log_buf) in &containers {
+    for (name, phase, progress, log_buf) in &containers {
         let id = name.0.clone();
-
-        snapshot.push(build_container_snapshot(
-            &name.0, &image.0, order.0, *phase, progress,
-        ));
 
         let events = if let Some(prev) = tracked.get_mut(&id) {
             prev.diff(&id, *phase, progress, log_buf)
@@ -165,7 +159,7 @@ fn broadcast_events(
         }
     }
 
-    for (_entity, name, log_buf) in &system_query {
+    for (name, log_buf) in &system_query {
         let id = name.0.clone();
         let prev = tracked.entry(id.clone()).or_insert(TrackedContainer {
             phase: ContainerPhase::Pending,
@@ -177,10 +171,6 @@ fn broadcast_events(
         }
     }
 
-    // Update shared snapshot
-    *broadcast.snapshot.0.lock().unwrap() = snapshot;
-
-    // Signal exit to clients
     if exit.0 {
         let _ = broadcast.tx.send(DaemonEvent::Exit);
     }
@@ -190,7 +180,6 @@ fn broadcast_events(
 #[derive(Clone)]
 struct ComposeDaemonImpl {
     event_tx: broadcast::Sender<DaemonEvent>,
-    snapshot: SharedSnapshot,
     cmd_tx: CommandSender,
 }
 
@@ -199,8 +188,8 @@ impl ComposeDaemon for ComposeDaemonImpl {
         // Subscribe FIRST to ensure no events are missed between snapshot and streaming
         let mut rx = self.event_tx.subscribe();
 
-        // Send current snapshot
-        let snapshot = self.snapshot.0.lock().unwrap().clone();
+        // Build snapshot on-demand from the ECS world
+        let snapshot = self.cmd_tx.query(build_snapshot).await;
         if events.send(&DaemonEvent::Snapshot(snapshot)).await.is_err() {
             return;
         }
@@ -235,29 +224,46 @@ pub async fn run_daemon() {
     let _ = std::fs::remove_file(SOCKET_PATH);
 
     let (broadcast_tx, _) = broadcast::channel::<DaemonEvent>(256);
-    let snapshot = SharedSnapshot::default();
+
+    let containers = [
+        ("postgres", "postgres:16", 0),
+        ("redis", "redis:7", 0),
+        ("api-server", "myapp/api:latest", 1),
+        ("web-frontend", "myapp/web:latest", 2),
+    ];
 
     let mut app = App::new();
-    app.add_plugin(LifecyclePlugin {
-        backend: ContainerRuntime::from(MockBackend),
-    })
-    .insert_resource(IpcBroadcast {
-        tx: broadcast_tx.clone(),
-        snapshot: snapshot.clone(),
-    })
-    .add_systems(Startup, spawn_containers)
-    .add_systems(
-        Update,
-        broadcast_events
-            .after(crate::lifecycle::enforce_ordering)
-            .after(crate::lifecycle::check_all_running)
-            .after(crate::lifecycle::check_all_stopped),
-    );
+    app.add_plugin(LifecyclePlugin)
+        .insert_resource(IpcBroadcast {
+            tx: broadcast_tx.clone(),
+        })
+        .add_systems(
+            Update,
+            broadcast_events
+                .after(crate::lifecycle::enforce_ordering)
+                .after(crate::lifecycle::check_all_running)
+                .after(crate::lifecycle::check_all_stopped),
+        );
+
+    for (name, image, order) in containers {
+        app.world.spawn((
+            ContainerName(name.into()),
+            ImageRef(image.into()),
+            StartOrder(order),
+            ContainerPhase::Pending,
+            LogBuffer::default(),
+            Backend(ContainerRuntime::from(MockBackend::new(name, image))),
+        ));
+    }
+    app.world.spawn((
+        ContainerName("[system]".into()),
+        LogBuffer::default(),
+        SystemEntity,
+    ));
 
     let cmd_sender = app.cmd_sender();
     let handler = ComposeDaemonImpl {
         event_tx: broadcast_tx,
-        snapshot,
         cmd_tx: cmd_sender.clone(),
     };
 

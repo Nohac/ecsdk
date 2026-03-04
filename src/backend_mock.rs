@@ -6,16 +6,27 @@ use tokio::sync::mpsc;
 use crate::backend::{ContainerBackend, PullProgress};
 
 #[derive(Clone)]
-pub struct MockBackend;
+pub struct MockBackend {
+    pub name: String,
+    pub image: String,
+}
+
+impl MockBackend {
+    pub fn new(name: impl Into<String>, image: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            image: image.into(),
+        }
+    }
+}
 
 impl ContainerBackend for MockBackend {
     async fn pull_image(
         &self,
-        image: &str,
         progress_tx: mpsc::UnboundedSender<PullProgress>,
         log_tx: mpsc::UnboundedSender<String>,
     ) -> Result<(), String> {
-        let _ = log_tx.send(format!("Pulling {image}..."));
+        let _ = log_tx.send(format!("Pulling {}...", self.image));
 
         // Pre-generate delays (ThreadRng is !Send)
         let delays: Vec<u64> = {
@@ -36,10 +47,9 @@ impl ContainerBackend for MockBackend {
 
     async fn boot_container(
         &self,
-        name: &str,
         log_tx: mpsc::UnboundedSender<String>,
     ) -> Result<(), String> {
-        let boot_lines: Vec<(&str, u64)> = match name {
+        let boot_lines: Vec<(&str, u64)> = match self.name.as_str() {
             "postgres" => vec![
                 ("PostgreSQL init process complete", 200),
                 ("LOG: listening on 0.0.0.0:5432", 300),
@@ -69,7 +79,7 @@ impl ContainerBackend for MockBackend {
         Ok(())
     }
 
-    async fn stop_container(&self, _name: &str) -> Result<(), String> {
+    async fn stop_container(&self) -> Result<(), String> {
         let delay = { rand::rng().random_range(200..=800u64) };
         tokio::time::sleep(Duration::from_millis(delay)).await;
         Ok(())

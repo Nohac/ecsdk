@@ -1,7 +1,8 @@
 use bevy_ecs::prelude::*;
 
 use crate::app::{App, Plugin, Update};
-use crate::backend::{ContainerBackend, ContainerRuntime};
+use crate::backend::ContainerBackend;
+use crate::backend::ContainerRuntime;
 use crate::bridge::AppExit;
 use crate::container::*;
 use crate::task::SpawnTask;
@@ -20,18 +21,15 @@ pub struct ShutdownAll;
 #[derive(Event)]
 pub struct ShutdownComplete(pub Entity);
 
-/// Holds the container backend implementation as a shared resource.
-#[derive(Resource, Clone)]
+/// Per-entity backend that knows which container it manages.
+#[derive(Component, Clone)]
 pub struct Backend(pub ContainerRuntime);
 
-pub struct LifecyclePlugin {
-    pub backend: ContainerRuntime,
-}
+pub struct LifecyclePlugin;
 
 impl Plugin for LifecyclePlugin {
     fn build(self, app: &mut App) {
-        app.insert_resource(Backend(self.backend))
-            .init_resource::<MergedLogView>();
+        app.init_resource::<MergedLogView>();
         app.world.add_observer(handle_download_complete);
         app.world.add_observer(handle_boot_complete);
         app.world.add_observer(handle_shutdown_all);
@@ -47,11 +45,10 @@ impl Plugin for LifecyclePlugin {
 /// an async download task via the backend.
 pub fn enforce_ordering(
     mut commands: Commands,
-    pending: Query<(Entity, &ImageRef, &StartOrder, &ContainerPhase)>,
+    pending: Query<(Entity, &StartOrder, &ContainerPhase, &Backend)>,
     all: Query<(&StartOrder, &ContainerPhase)>,
-    backend: Res<Backend>,
 ) {
-    for (entity, image, order, phase) in &pending {
+    for (entity, order, phase, backend) in &pending {
         if *phase != ContainerPhase::Pending {
             continue;
         }
@@ -69,7 +66,6 @@ pub fn enforce_ordering(
 
         if predecessors_ready {
             let backend = backend.0.clone();
-            let image_name = image.0.clone();
 
             commands
                 .entity(entity)
@@ -89,7 +85,7 @@ pub fn enforce_ordering(
                     let cmd_progress = cmd.clone();
                     let cmd_logs = cmd.clone();
                     let _ = tokio::join!(
-                        backend.pull_image(&image_name, progress_tx, log_tx),
+                        backend.pull_image(progress_tx, log_tx),
                         async move {
                             while let Some(p) = progress_rx.recv().await {
                                 cmd_progress.push(move |world: &mut World| {
@@ -124,9 +120,8 @@ pub fn enforce_ordering(
 fn handle_download_complete(
     trigger: On<DownloadComplete>,
     mut commands: Commands,
-    names: Query<&ContainerName>,
     mut logs: Query<&mut LogBuffer>,
-    backend: Res<Backend>,
+    backends: Query<&Backend>,
 ) {
     let entity = trigger.event().0;
 
@@ -134,8 +129,7 @@ fn handle_download_complete(
         log_buf.push("Starting container...");
     }
 
-    let container_name = names.get(entity).map(|n| n.0.clone()).unwrap_or_default();
-    let backend = backend.0.clone();
+    let backend = backends.get(entity).unwrap().0.clone();
 
     commands
         .entity(entity)
@@ -146,7 +140,7 @@ fn handle_download_complete(
             let entity = cmd.entity();
             let cmd_logs = cmd.clone();
             let _ = tokio::join!(
-                backend.boot_container(&container_name, log_tx),
+                backend.boot_container(log_tx),
                 async move {
                     while let Some(text) = log_rx.recv().await {
                         cmd_logs.push(move |world: &mut World| {
@@ -179,10 +173,9 @@ fn handle_boot_complete(
 fn handle_shutdown_all(
     _trigger: On<ShutdownAll>,
     mut commands: Commands,
-    containers: Query<(Entity, &ContainerName, &ContainerPhase), Without<SystemEntity>>,
+    containers: Query<(Entity, &Backend, &ContainerPhase), Without<SystemEntity>>,
     mut logs: Query<&mut LogBuffer>,
     system_entity: Query<Entity, With<SystemEntity>>,
-    backend: Res<Backend>,
 ) {
     if let Ok(sys) = system_entity.single()
         && let Ok(mut log_buf) = logs.get_mut(sys)
@@ -190,7 +183,7 @@ fn handle_shutdown_all(
         log_buf.push("Shutting down...");
     }
 
-    for (entity, name, phase) in &containers {
+    for (entity, backend, phase) in &containers {
         match phase {
             ContainerPhase::Running
             | ContainerPhase::PullingImage
@@ -201,13 +194,12 @@ fn handle_shutdown_all(
                 }
 
                 let backend = backend.0.clone();
-                let container_name = name.0.clone();
 
                 commands
                     .entity(entity)
                     .insert(ContainerPhase::Stopping)
                     .spawn_task(move |cmd| async move {
-                        let _ = backend.stop_container(&container_name).await;
+                        let _ = backend.stop_container().await;
                         cmd.trigger(ShutdownComplete(cmd.entity()));
                     });
             }

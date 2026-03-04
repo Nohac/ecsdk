@@ -1,54 +1,49 @@
-use std::collections::HashMap;
+use std::sync::Arc;
 
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::mpsc;
 
 use crate::backend::{ContainerBackend, PullProgress};
 use crate::protocol::{DaemonEvent, Phase};
 
 /// A backend that replays daemon events instead of doing real work.
-/// Each method subscribes to the broadcast, filters for its container,
-/// forwards progress/log events through the standard channels, and returns
-/// when the daemon signals the phase has advanced.
+/// Each instance owns a dedicated mpsc receiver — the client forwarder
+/// demuxes by container ID and sends only relevant events here.
 #[derive(Clone)]
 pub struct MirrorBackend {
-    pub events: broadcast::Sender<DaemonEvent>,
-    pub image_to_name: HashMap<String, String>,
+    rx: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<DaemonEvent>>>,
+}
+
+impl MirrorBackend {
+    pub fn new(rx: mpsc::UnboundedReceiver<DaemonEvent>) -> Self {
+        Self {
+            rx: Arc::new(tokio::sync::Mutex::new(rx)),
+        }
+    }
 }
 
 impl ContainerBackend for MirrorBackend {
     async fn pull_image(
         &self,
-        image: &str,
         progress_tx: mpsc::UnboundedSender<PullProgress>,
         log_tx: mpsc::UnboundedSender<String>,
     ) -> Result<(), String> {
-        let name = self
-            .image_to_name
-            .get(image)
-            .ok_or_else(|| format!("unknown image: {image}"))?
-            .clone();
-        let mut rx = self.events.subscribe();
+        let mut rx = self.rx.lock().await;
         loop {
             match rx.recv().await {
-                Ok(DaemonEvent::Progress {
-                    id,
-                    downloaded,
-                    total,
-                }) if id == name => {
+                Some(DaemonEvent::Progress {
+                    downloaded, total, ..
+                }) => {
                     let _ = progress_tx.send(PullProgress { downloaded, total });
                 }
-                Ok(DaemonEvent::Log { id, text }) if id == name => {
+                Some(DaemonEvent::Log { text, .. }) => {
                     let _ = log_tx.send(text);
                 }
-                Ok(DaemonEvent::PhaseChanged { id, phase }) if id == name => {
+                Some(DaemonEvent::PhaseChanged { phase, .. }) => {
                     if matches!(phase, Phase::Starting | Phase::Running | Phase::Stopped) {
                         return Ok(());
                     }
                 }
-                Err(broadcast::error::RecvError::Closed) => {
-                    return Err("disconnected".into());
-                }
-                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                None => return Err("disconnected".into()),
                 _ => {}
             }
         }
@@ -56,44 +51,35 @@ impl ContainerBackend for MirrorBackend {
 
     async fn boot_container(
         &self,
-        name: &str,
         log_tx: mpsc::UnboundedSender<String>,
     ) -> Result<(), String> {
-        let name = name.to_string();
-        let mut rx = self.events.subscribe();
+        let mut rx = self.rx.lock().await;
         loop {
             match rx.recv().await {
-                Ok(DaemonEvent::Log { id, text }) if id == name => {
+                Some(DaemonEvent::Log { text, .. }) => {
                     let _ = log_tx.send(text);
                 }
-                Ok(DaemonEvent::PhaseChanged { id, phase }) if id == name => {
+                Some(DaemonEvent::PhaseChanged { phase, .. }) => {
                     if matches!(phase, Phase::Running | Phase::Stopped) {
                         return Ok(());
                     }
                 }
-                Err(broadcast::error::RecvError::Closed) => {
-                    return Err("disconnected".into());
-                }
-                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                None => return Err("disconnected".into()),
                 _ => {}
             }
         }
     }
 
-    async fn stop_container(&self, name: &str) -> Result<(), String> {
-        let name = name.to_string();
-        let mut rx = self.events.subscribe();
+    async fn stop_container(&self) -> Result<(), String> {
+        let mut rx = self.rx.lock().await;
         loop {
             match rx.recv().await {
-                Ok(DaemonEvent::PhaseChanged { id, phase }) if id == name => {
+                Some(DaemonEvent::PhaseChanged { phase, .. }) => {
                     if phase == Phase::Stopped {
                         return Ok(());
                     }
                 }
-                Err(broadcast::error::RecvError::Closed) => {
-                    return Err("disconnected".into());
-                }
-                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                None => return Err("disconnected".into()),
                 _ => {}
             }
         }

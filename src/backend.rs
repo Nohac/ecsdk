@@ -15,7 +15,6 @@ pub trait ContainerBackend {
     /// Pull an image. Sends progress updates via `progress_tx` and log lines via `log_tx`.
     async fn pull_image(
         &self,
-        image: &str,
         progress_tx: mpsc::UnboundedSender<PullProgress>,
         log_tx: mpsc::UnboundedSender<String>,
     ) -> Result<(), String>;
@@ -23,12 +22,11 @@ pub trait ContainerBackend {
     /// Boot a container. Sends log lines as it starts up.
     async fn boot_container(
         &self,
-        name: &str,
         log_tx: mpsc::UnboundedSender<String>,
     ) -> Result<(), String>;
 
     /// Stop a container.
-    async fn stop_container(&self, name: &str) -> Result<(), String>;
+    async fn stop_container(&self) -> Result<(), String>;
 }
 
 #[derive(Clone)]

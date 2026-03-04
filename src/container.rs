@@ -140,28 +140,3 @@ pub fn build_merged_log_view(
     view.entries.sort_by_key(|e| e.line.timestamp);
 }
 
-pub fn spawn_containers(mut commands: Commands) {
-    let containers = [
-        ("postgres", "postgres:16", 0),
-        ("redis", "redis:7", 0),
-        ("api-server", "myapp/api:latest", 1),
-        ("web-frontend", "myapp/web:latest", 2),
-    ];
-
-    for (name, image, order) in containers {
-        commands.spawn((
-            ContainerName(name.to_string()),
-            ImageRef(image.to_string()),
-            StartOrder(order),
-            ContainerPhase::Pending,
-            LogBuffer::default(),
-        ));
-    }
-
-    // System entity for global messages
-    commands.spawn((
-        ContainerName("[system]".to_string()),
-        LogBuffer::default(),
-        SystemEntity,
-    ));
-}

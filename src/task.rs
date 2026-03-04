@@ -36,6 +36,18 @@ impl CommandSender {
     pub fn send(&self, cmd: impl FnOnce(&mut World) + Send + 'static) {
         let _ = self.tx.send(Box::new(cmd));
     }
+
+    /// Run a closure on the world and return its result.
+    pub async fn query<T: Send + 'static>(
+        &self,
+        f: impl FnOnce(&mut World) -> T + Send + 'static,
+    ) -> T {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.send(move |world| {
+            let _ = tx.send(f(world));
+        });
+        rx.await.expect("world loop dropped before responding")
+    }
 }
 
 /// Handle passed to async task closures. Provides access to the owning entity

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use bevy_ecs::prelude::*;
 use crossterm::event::{Event, KeyCode, KeyModifiers};
 use roam_stream::{HandshakeConfig, NoDispatcher, connect};
-use tokio::sync::broadcast;
+use tokio::sync::mpsc;
 use tokio::{select, signal::ctrl_c};
 
 use crate::app::App;
@@ -12,7 +12,7 @@ use crate::backend_mirror::MirrorBackend;
 use crate::bridge::AppExit;
 use crate::container::*;
 use crate::ipc::{ComposeDaemonClient, DaemonConnector, SOCKET_PATH};
-use crate::lifecycle::LifecyclePlugin;
+use crate::lifecycle::{Backend, LifecyclePlugin};
 use crate::protocol::DaemonEvent;
 use crate::render::{CrosstermPlugin, RenderMode};
 
@@ -49,24 +49,11 @@ pub async fn run_client(mode: RenderMode) {
         }
     };
 
-    // Build MirrorBackend from snapshot
-    let (broadcast_tx, _) = broadcast::channel::<DaemonEvent>(256);
-    let image_to_name: HashMap<String, String> = snapshot
-        .iter()
-        .map(|c| (c.info.image.clone(), c.info.name.clone()))
-        .collect();
-    let mirror = MirrorBackend {
-        events: broadcast_tx.clone(),
-        image_to_name,
-    };
-
     let mut app = App::new();
 
     let shutdown_client = client.clone();
-    app.add_plugin(LifecyclePlugin {
-        backend: ContainerRuntime::from(mirror),
-    })
-    .add_plugin(CrosstermPlugin::new(mode).on_event(move |event, _cmd| {
+    app.add_plugin(LifecyclePlugin)
+        .add_plugin(CrosstermPlugin::new(mode).on_event(move |event, _cmd| {
         let c = shutdown_client.clone();
         async move {
             if let Event::Key(key) = event
@@ -78,25 +65,38 @@ pub async fn run_client(mode: RenderMode) {
         }
     }));
 
-    // Spawn entities from snapshot
+    // Per-entity mpsc channels — forwarder demuxes daemon events by container ID.
+    // Channels are created before app.run() so no events are missed.
+    let mut event_channels: HashMap<String, mpsc::UnboundedSender<DaemonEvent>> = HashMap::new();
+
+    // Terminal states (Running/Stopped/Failed) keep their phase so they don't
+    // block ordering. Transitional states reset to Pending so the lifecycle
+    // re-drives them through MirrorBackend (which catches remaining events).
     for c in &snapshot {
+        let phase = match ContainerPhase::from(c.phase) {
+            p @ (ContainerPhase::Running | ContainerPhase::Stopped | ContainerPhase::Failed) => p,
+            _ => ContainerPhase::Pending,
+        };
+        let (tx, rx) = mpsc::unbounded_channel();
+        event_channels.insert(c.info.name.clone(), tx);
         app.world.spawn((
             ContainerName(c.info.name.clone()),
             ImageRef(c.info.image.clone()),
             StartOrder(c.info.order),
-            ContainerPhase::Pending,
+            phase,
             LogBuffer::default(),
+            Backend(ContainerRuntime::from(MirrorBackend::new(rx))),
         ));
     }
     app.world.spawn((
-        ContainerName("[system]".to_string()),
+        ContainerName("[system]".into()),
         LogBuffer::default(),
         SystemEntity,
     ));
 
     let cmd_sender = app.cmd_sender();
 
-    // Daemon event forwarder — task, not spawn
+    // Daemon event forwarder — demuxes by container ID into per-entity channels
     let fwd_sender = cmd_sender.clone();
     app.add_task(async move {
         let mut subscribe_fut = subscribe_fut;
@@ -108,7 +108,16 @@ pub async fn run_client(mode: RenderMode) {
                             if matches!(event, DaemonEvent::Exit) {
                                 fwd_sender.send(|w: &mut World| w.resource_mut::<AppExit>().0 = true);
                             }
-                            let _ = broadcast_tx.send(event);
+                            match &event {
+                                DaemonEvent::PhaseChanged { id, .. }
+                                | DaemonEvent::Progress { id, .. }
+                                | DaemonEvent::Log { id, .. } => {
+                                    if let Some(tx) = event_channels.get(id) {
+                                        let _ = tx.send(event);
+                                    }
+                                }
+                                _ => {}
+                            }
                         }
                         None => {
                             fwd_sender.send(|w: &mut World| w.resource_mut::<AppExit>().0 = true);
