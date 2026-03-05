@@ -1,11 +1,11 @@
 use bevy_ecs::prelude::*;
 
-use crate::app::{App, Plugin, Update};
 use crate::backend::ContainerBackend;
 use crate::backend::ContainerRuntime;
 use crate::bridge::AppExit;
 use crate::container::*;
 use crate::task::SpawnTask;
+use bevy_app::prelude::*;
 
 // ECS trigger events — co-located with the observers that handle them.
 
@@ -28,12 +28,12 @@ pub struct Backend(pub ContainerRuntime);
 pub struct LifecyclePlugin;
 
 impl Plugin for LifecyclePlugin {
-    fn build(self, app: &mut App) {
+    fn build(&self, app: &mut bevy_app::App) {
         app.init_resource::<MergedLogView>();
-        app.world.add_observer(handle_download_complete);
-        app.world.add_observer(handle_boot_complete);
-        app.world.add_observer(handle_shutdown_all);
-        app.world.add_observer(handle_shutdown_complete);
+        app.world_mut().add_observer(handle_download_complete);
+        app.world_mut().add_observer(handle_boot_complete);
+        app.world_mut().add_observer(handle_shutdown_all);
+        app.world_mut().add_observer(handle_shutdown_complete);
         app.add_systems(Update, enforce_ordering)
             .add_systems(Update, check_all_running)
             .add_systems(Update, check_all_stopped);
@@ -89,8 +89,7 @@ pub fn enforce_ordering(
                         async move {
                             while let Some(p) = progress_rx.recv().await {
                                 cmd_progress.push(move |world: &mut World| {
-                                    if let Some(mut dp) =
-                                        world.get_mut::<DownloadProgress>(entity)
+                                    if let Some(mut dp) = world.get_mut::<DownloadProgress>(entity)
                                     {
                                         dp.downloaded = p.downloaded;
                                         dp.total = p.total;
@@ -101,9 +100,7 @@ pub fn enforce_ordering(
                         async move {
                             while let Some(text) = log_rx.recv().await {
                                 cmd_logs.push(move |world: &mut World| {
-                                    if let Some(mut log_buf) =
-                                        world.get_mut::<LogBuffer>(entity)
-                                    {
+                                    if let Some(mut log_buf) = world.get_mut::<LogBuffer>(entity) {
                                         log_buf.push(text);
                                     }
                                 });
@@ -139,18 +136,15 @@ fn handle_download_complete(
 
             let entity = cmd.entity();
             let cmd_logs = cmd.clone();
-            let _ = tokio::join!(
-                backend.boot_container(log_tx),
-                async move {
-                    while let Some(text) = log_rx.recv().await {
-                        cmd_logs.push(move |world: &mut World| {
-                            if let Some(mut log_buf) = world.get_mut::<LogBuffer>(entity) {
-                                log_buf.push(text);
-                            }
-                        });
-                    }
-                },
-            );
+            let _ = tokio::join!(backend.boot_container(log_tx), async move {
+                while let Some(text) = log_rx.recv().await {
+                    cmd_logs.push(move |world: &mut World| {
+                        if let Some(mut log_buf) = world.get_mut::<LogBuffer>(entity) {
+                            log_buf.push(text);
+                        }
+                    });
+                }
+            },);
             cmd.trigger(BootComplete(entity));
         });
 }

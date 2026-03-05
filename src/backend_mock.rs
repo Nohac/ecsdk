@@ -45,10 +45,7 @@ impl ContainerBackend for MockBackend {
         Ok(())
     }
 
-    async fn boot_container(
-        &self,
-        log_tx: mpsc::UnboundedSender<String>,
-    ) -> Result<(), String> {
+    async fn boot_container(&self, log_tx: mpsc::UnboundedSender<String>) -> Result<(), String> {
         let boot_lines: Vec<(&str, u64)> = match self.name.as_str() {
             "postgres" => vec![
                 ("PostgreSQL init process complete", 200),

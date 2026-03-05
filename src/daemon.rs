@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 
+use bevy_app::prelude::*;
 use bevy_ecs::prelude::*;
 use roam_stream::{HandshakeConfig, accept};
 use tokio::net::UnixListener;
-use tokio::sync::broadcast;
 use tokio::signal::ctrl_c;
+use tokio::sync::broadcast;
 
-use crate::app::App;
-use crate::app::Update;
+use crate::app::TaskQueue;
 use crate::backend::ContainerRuntime;
 use crate::backend_mock::MockBackend;
 use crate::bridge::AppExit;
@@ -232,21 +232,21 @@ pub async fn run_daemon() {
         ("web-frontend", "myapp/web:latest", 2),
     ];
 
-    let mut app = App::new();
-    app.add_plugin(LifecyclePlugin)
-        .insert_resource(IpcBroadcast {
-            tx: broadcast_tx.clone(),
-        })
-        .add_systems(
-            Update,
-            broadcast_events
-                .after(crate::lifecycle::enforce_ordering)
-                .after(crate::lifecycle::check_all_running)
-                .after(crate::lifecycle::check_all_stopped),
-        );
+    let (mut app, cmd_rx) = crate::app::setup();
+    app.add_plugins(LifecyclePlugin);
+    app.insert_resource(IpcBroadcast {
+        tx: broadcast_tx.clone(),
+    });
+    app.add_systems(
+        Update,
+        broadcast_events
+            .after(crate::lifecycle::enforce_ordering)
+            .after(crate::lifecycle::check_all_running)
+            .after(crate::lifecycle::check_all_stopped),
+    );
 
     for (name, image, order) in containers {
-        app.world.spawn((
+        app.world_mut().spawn((
             ContainerName(name.into()),
             ImageRef(image.into()),
             StartOrder(order),
@@ -255,13 +255,13 @@ pub async fn run_daemon() {
             Backend(ContainerRuntime::from(MockBackend::new(name, image))),
         ));
     }
-    app.world.spawn((
+    app.world_mut().spawn((
         ContainerName("[system]".into()),
         LogBuffer::default(),
         SystemEntity,
     ));
 
-    let cmd_sender = app.cmd_sender();
+    let cmd_sender = app.world().resource::<CommandSender>().clone();
     let handler = ComposeDaemonImpl {
         event_tx: broadcast_tx,
         cmd_tx: cmd_sender.clone(),
@@ -272,28 +272,31 @@ pub async fn run_daemon() {
     eprintln!("Daemon listening on {SOCKET_PATH}");
 
     let accept_handler = handler.clone();
-    app.add_task(async move {
-        while let Ok((stream, _)) = listener.accept().await {
-            let dispatcher = ComposeDaemonDispatcher::new(accept_handler.clone());
-            // Per-connection handler IS genuine concurrency — spawn is correct here
-            tokio::spawn(async move {
-                match accept(stream, HandshakeConfig::default(), dispatcher).await {
-                    Ok((_handle, _incoming, driver)) => {
-                        let _ = driver.run().await;
+    {
+        let mut tasks = app.world_mut().resource_mut::<TaskQueue>();
+        tasks.push(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let dispatcher = ComposeDaemonDispatcher::new(accept_handler.clone());
+                // Per-connection handler IS genuine concurrency — spawn is correct here
+                tokio::spawn(async move {
+                    match accept(stream, HandshakeConfig::default(), dispatcher).await {
+                        Ok((_handle, _incoming, driver)) => {
+                            let _ = driver.run().await;
+                        }
+                        Err(e) => eprintln!("Handshake failed: {e}"),
                     }
-                    Err(e) => eprintln!("Handshake failed: {e}"),
-                }
-            });
-        }
-    });
+                });
+            }
+        });
 
-    // Ctrl+C — task, not spawn
-    app.add_task(async move {
-        ctrl_c().await.ok();
-        cmd_sender.trigger(ShutdownAll);
-    });
+        // Ctrl+C — task, not spawn
+        tasks.push(async move {
+            ctrl_c().await.ok();
+            cmd_sender.trigger(ShutdownAll);
+        });
+    }
 
-    app.run().await;
+    crate::app::run_async(app, cmd_rx).await;
 
     // Cleanup
     let _ = std::fs::remove_file(SOCKET_PATH);

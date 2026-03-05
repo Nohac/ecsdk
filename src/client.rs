@@ -6,7 +6,7 @@ use roam_stream::{HandshakeConfig, NoDispatcher, connect};
 use tokio::sync::mpsc;
 use tokio::{select, signal::ctrl_c};
 
-use crate::app::App;
+use crate::app::TaskQueue;
 use crate::backend::ContainerRuntime;
 use crate::backend_mirror::MirrorBackend;
 use crate::bridge::AppExit;
@@ -15,6 +15,7 @@ use crate::ipc::{ComposeDaemonClient, DaemonConnector, SOCKET_PATH};
 use crate::lifecycle::{Backend, LifecyclePlugin};
 use crate::protocol::DaemonEvent;
 use crate::render::{CrosstermPlugin, RenderMode};
+use crate::task::CommandSender;
 
 /// Run the client: connect to daemon, mirror its lifecycle locally, render.
 pub async fn run_client(mode: RenderMode) {
@@ -49,11 +50,11 @@ pub async fn run_client(mode: RenderMode) {
         }
     };
 
-    let mut app = App::new();
+    let (mut app, cmd_rx) = crate::app::setup();
 
     let shutdown_client = client.clone();
-    app.add_plugin(LifecyclePlugin)
-        .add_plugin(CrosstermPlugin::new(mode).on_event(move |event, _cmd| {
+    app.add_plugins(LifecyclePlugin);
+    app.add_plugins(CrosstermPlugin::new(mode).on_event(move |event, _cmd| {
         let c = shutdown_client.clone();
         async move {
             if let Event::Key(key) = event
@@ -66,7 +67,7 @@ pub async fn run_client(mode: RenderMode) {
     }));
 
     // Per-entity mpsc channels — forwarder demuxes daemon events by container ID.
-    // Channels are created before app.run() so no events are missed.
+    // Channels are created before run_async() so no events are missed.
     let mut event_channels: HashMap<String, mpsc::UnboundedSender<DaemonEvent>> = HashMap::new();
 
     // Terminal states (Running/Stopped/Failed) keep their phase so they don't
@@ -79,7 +80,7 @@ pub async fn run_client(mode: RenderMode) {
         };
         let (tx, rx) = mpsc::unbounded_channel();
         event_channels.insert(c.info.name.clone(), tx);
-        app.world.spawn((
+        app.world_mut().spawn((
             ContainerName(c.info.name.clone()),
             ImageRef(c.info.image.clone()),
             StartOrder(c.info.order),
@@ -88,57 +89,60 @@ pub async fn run_client(mode: RenderMode) {
             Backend(ContainerRuntime::from(MirrorBackend::new(rx))),
         ));
     }
-    app.world.spawn((
+    app.world_mut().spawn((
         ContainerName("[system]".into()),
         LogBuffer::default(),
         SystemEntity,
     ));
 
-    let cmd_sender = app.cmd_sender();
+    let cmd_sender = app.world().resource::<CommandSender>().clone();
 
     // Daemon event forwarder — demuxes by container ID into per-entity channels
     let fwd_sender = cmd_sender.clone();
-    app.add_task(async move {
-        let mut subscribe_fut = subscribe_fut;
-        loop {
-            select! {
-                result = event_rx.recv() => {
-                    match result.ok().flatten() {
-                        Some(event) => {
-                            if matches!(event, DaemonEvent::Exit) {
-                                fwd_sender.send(|w: &mut World| w.resource_mut::<AppExit>().0 = true);
-                            }
-                            match &event {
-                                DaemonEvent::PhaseChanged { id, .. }
-                                | DaemonEvent::Progress { id, .. }
-                                | DaemonEvent::Log { id, .. } => {
-                                    if let Some(tx) = event_channels.get(id) {
-                                        let _ = tx.send(event);
-                                    }
+    {
+        let mut tasks = app.world_mut().resource_mut::<TaskQueue>();
+        tasks.push(async move {
+            let mut subscribe_fut = subscribe_fut;
+            loop {
+                select! {
+                    result = event_rx.recv() => {
+                        match result.ok().flatten() {
+                            Some(event) => {
+                                if matches!(event, DaemonEvent::Exit) {
+                                    fwd_sender.send(|w: &mut World| w.resource_mut::<AppExit>().0 = true);
                                 }
-                                _ => {}
+                                match &event {
+                                    DaemonEvent::PhaseChanged { id, .. }
+                                    | DaemonEvent::Progress { id, .. }
+                                    | DaemonEvent::Log { id, .. } => {
+                                        if let Some(tx) = event_channels.get(id) {
+                                            let _ = tx.send(event);
+                                        }
+                                    }
+                                    _ => {}
+                                }
                             }
-                        }
-                        None => {
-                            fwd_sender.send(|w: &mut World| w.resource_mut::<AppExit>().0 = true);
-                            break;
+                            None => {
+                                fwd_sender.send(|w: &mut World| w.resource_mut::<AppExit>().0 = true);
+                                break;
+                            }
                         }
                     }
-                }
-                _ = &mut subscribe_fut => {
-                    fwd_sender.send(|w: &mut World| w.resource_mut::<AppExit>().0 = true);
-                    break;
+                    _ = &mut subscribe_fut => {
+                        fwd_sender.send(|w: &mut World| w.resource_mut::<AppExit>().0 = true);
+                        break;
+                    }
                 }
             }
-        }
-    });
+        });
 
-    // Ctrl+C — task, not spawn
-    let shutdown_client = client.clone();
-    app.add_task(async move {
-        ctrl_c().await.ok();
-        let _ = shutdown_client.shutdown().await;
-    });
+        // Ctrl+C — task, not spawn
+        let shutdown_client = client.clone();
+        tasks.push(async move {
+            ctrl_c().await.ok();
+            let _ = shutdown_client.shutdown().await;
+        });
+    }
 
-    app.run().await;
+    crate::app::run_async(app, cmd_rx).await;
 }

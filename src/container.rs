@@ -139,4 +139,3 @@ pub fn build_merged_log_view(
 
     view.entries.sort_by_key(|e| e.line.timestamp);
 }
-

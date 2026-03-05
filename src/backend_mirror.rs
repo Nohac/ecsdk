@@ -49,10 +49,7 @@ impl ContainerBackend for MirrorBackend {
         }
     }
 
-    async fn boot_container(
-        &self,
-        log_tx: mpsc::UnboundedSender<String>,
-    ) -> Result<(), String> {
+    async fn boot_container(&self, log_tx: mpsc::UnboundedSender<String>) -> Result<(), String> {
         let mut rx = self.rx.lock().await;
         loop {
             match rx.recv().await {

@@ -149,8 +149,9 @@ where
             })
         };
 
-        world
-            .entity_mut(entity)
-            .insert(AsyncTask { token, _handle: handle });
+        world.entity_mut(entity).insert(AsyncTask {
+            token,
+            _handle: handle,
+        });
     }
 }
