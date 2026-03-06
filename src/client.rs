@@ -5,7 +5,6 @@ use crossterm::event::{Event, KeyCode, KeyModifiers};
 use roam_stream::{HandshakeConfig, NoDispatcher, connect};
 use tokio::sync::mpsc;
 
-use crate::app::TaskQueue;
 use crate::bridge::AppExit;
 use crate::container::*;
 use crate::ipc::{DaemonConnector, SOCKET_PATH};
@@ -34,7 +33,7 @@ fn on_server_exit(_trigger: On<ServerExitNotice>, mut exit: ResMut<AppExit>) {
 
 /// Run the client: connect to daemon via replicon, render.
 pub async fn run_client(mode: RenderMode) {
-    let (mut app, cmd_rx) = crate::app::setup();
+    let (mut app, cmd_rx, mut tasks) = crate::app::setup();
 
     // Infrastructure plugins required by replicon
     app.add_plugins(bevy::state::app::StatesPlugin);
@@ -65,7 +64,7 @@ pub async fn run_client(mode: RenderMode) {
     app.init_resource::<MergedLogView>();
 
     // Ctrl+C → send ShutdownRequest to server
-    app.add_plugins(CrosstermPlugin::new(mode).on_event(move |event, cmd| async move {
+    let crossterm = CrosstermPlugin::new(mode).on_event(move |event, cmd| async move {
         if let Event::Key(key) = event
             && key.code == KeyCode::Char('c')
             && key.modifiers.contains(KeyModifiers::CONTROL)
@@ -75,74 +74,74 @@ pub async fn run_client(mode: RenderMode) {
                 world.flush();
             });
         }
-    }));
+    });
+    if let Some(task) = crossterm.build(&mut app) {
+        tasks.push(task);
+    }
 
     let cmd_sender = app.world().resource::<CommandSender>().clone();
 
     // Async task: connect via roam, create bridge, forward packets
     let connect_sender = cmd_sender.clone();
-    {
-        let mut tasks = app.world_mut().resource_mut::<TaskQueue>();
-        tasks.push(async move {
-            let connector = DaemonConnector::new(SOCKET_PATH);
-            let roam_client = connect(connector, HandshakeConfig::default(), NoDispatcher);
-            let client = RepliconTransportClient::new(roam_client);
+    tasks.push(Box::pin(async move {
+        let connector = DaemonConnector::new(SOCKET_PATH);
+        let roam_client = connect(connector, HandshakeConfig::default(), NoDispatcher);
+        let client = RepliconTransportClient::new(roam_client);
 
-            // Create mpsc channels for bridging roam ↔ ECS
-            let (to_server_tx, mut to_server_rx) = mpsc::unbounded_channel::<RepliconPacket>();
-            let (from_server_tx, from_server_rx) = mpsc::unbounded_channel::<RepliconPacket>();
+        // Create mpsc channels for bridging roam ↔ ECS
+        let (to_server_tx, mut to_server_rx) = mpsc::unbounded_channel::<RepliconPacket>();
+        let (from_server_tx, from_server_rx) = mpsc::unbounded_channel::<RepliconPacket>();
 
-            // Create roam channel pairs for bidirectional streaming:
-            // to_client: server writes → client reads
-            let (to_client_tx, mut to_client_rx) = roam::channel::<RepliconPacket>();
-            // from_client: client writes → server reads
-            let (from_client_tx, from_client_rx) = roam::channel::<RepliconPacket>();
+        // Create roam channel pairs for bidirectional streaming:
+        // to_client: server writes → client reads
+        let (to_client_tx, mut to_client_rx) = roam::channel::<RepliconPacket>();
+        // from_client: client writes → server reads
+        let (from_client_tx, from_client_rx) = roam::channel::<RepliconPacket>();
 
-            // Insert the ClientBridge resource
-            connect_sender.send(move |world: &mut World| {
-                world.insert_resource(ClientBridge {
-                    from_server_rx,
-                    to_server_tx,
-                });
-            });
-
-            // Call replicate() — passes Tx for server→client, Rx for client→server
-            let replicate_fut = async {
-                let _ = client.replicate(to_client_tx, from_client_rx).await;
-            };
-
-            // Forward: roam to_client_rx → mpsc from_server_tx (server→client→ECS)
-            // Send a no-op command to wake the event loop so app.update() runs.
-            let wake_sender = connect_sender.clone();
-            let forward_from_server = async {
-                while let Ok(Some(packet)) = to_client_rx.recv().await {
-                    let _ = from_server_tx.send(packet);
-                    wake_sender.send(|_: &mut World| {});
-                }
-            };
-
-            // Forward: mpsc to_server_rx → roam from_client_tx (ECS→client→server)
-            let forward_to_server = async {
-                while let Some(packet) = to_server_rx.recv().await {
-                    if from_client_tx.send(&packet).await.is_err() {
-                        break;
-                    }
-                }
-            };
-
-            tokio::select! {
-                _ = replicate_fut => {}
-                _ = forward_from_server => {}
-                _ = forward_to_server => {}
-            }
-
-            // Disconnected — signal exit
-            connect_sender.send(|world: &mut World| {
-                world.remove_resource::<ClientBridge>();
-                world.resource_mut::<AppExit>().0 = true;
+        // Insert the ClientBridge resource
+        connect_sender.send(move |world: &mut World| {
+            world.insert_resource(ClientBridge {
+                from_server_rx,
+                to_server_tx,
             });
         });
-    }
 
-    crate::app::run_async(app, cmd_rx).await;
+        // Call replicate() — passes Tx for server→client, Rx for client→server
+        let replicate_fut = async {
+            let _ = client.replicate(to_client_tx, from_client_rx).await;
+        };
+
+        // Forward: roam to_client_rx → mpsc from_server_tx (server→client→ECS)
+        // Send a no-op command to wake the event loop so app.update() runs.
+        let wake_sender = connect_sender.clone();
+        let forward_from_server = async {
+            while let Ok(Some(packet)) = to_client_rx.recv().await {
+                let _ = from_server_tx.send(packet);
+                wake_sender.send(|_: &mut World| {});
+            }
+        };
+
+        // Forward: mpsc to_server_rx → roam from_client_tx (ECS→client→server)
+        let forward_to_server = async {
+            while let Some(packet) = to_server_rx.recv().await {
+                if from_client_tx.send(&packet).await.is_err() {
+                    break;
+                }
+            }
+        };
+
+        tokio::select! {
+            _ = replicate_fut => {}
+            _ = forward_from_server => {}
+            _ = forward_to_server => {}
+        }
+
+        // Disconnected — signal exit
+        connect_sender.send(|world: &mut World| {
+            world.remove_resource::<ClientBridge>();
+            world.resource_mut::<AppExit>().0 = true;
+        });
+    }));
+
+    crate::app::run_async(app, cmd_rx, tasks).await;
 }

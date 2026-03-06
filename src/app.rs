@@ -1,9 +1,7 @@
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Mutex;
 
 use bevy::app::App;
-use bevy::ecs::prelude::*;
 use futures_util::StreamExt;
 use futures_util::stream::FuturesUnordered;
 use tokio::runtime::Handle;
@@ -12,33 +10,18 @@ use tokio::sync::mpsc;
 use crate::bridge::{AppExit, WorldCmd};
 use crate::task::CommandSender;
 
-#[derive(Resource, Default)]
-pub struct TaskQueue(Mutex<Vec<Pin<Box<dyn Future<Output = ()> + Send>>>>);
+pub type TaskQueue = Vec<Pin<Box<dyn Future<Output = ()> + Send>>>;
 
-pub fn setup() -> (App, mpsc::UnboundedReceiver<WorldCmd>) {
+pub fn setup() -> (App, mpsc::UnboundedReceiver<WorldCmd>, TaskQueue) {
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let mut app = App::new();
     app.insert_resource(CommandSender::new(cmd_tx, Handle::current()));
     app.init_resource::<AppExit>();
-    app.init_resource::<TaskQueue>();
-    (app, cmd_rx)
+    (app, cmd_rx, Vec::new())
 }
 
-impl TaskQueue {
-    pub fn push(&mut self, fut: impl Future<Output = ()> + Send + 'static) {
-        self.0.get_mut().unwrap().push(Box::pin(fut));
-    }
-}
-
-pub async fn run_async(mut app: App, mut cmd_rx: mpsc::UnboundedReceiver<WorldCmd>) {
-    let mut tasks: FuturesUnordered<Pin<Box<dyn Future<Output = ()> + Send>>> = app
-        .world_mut()
-        .resource_mut::<TaskQueue>()
-        .0
-        .get_mut()
-        .unwrap()
-        .drain(..)
-        .collect();
+pub async fn run_async(mut app: App, mut cmd_rx: mpsc::UnboundedReceiver<WorldCmd>, tasks: TaskQueue) {
+    let mut tasks: FuturesUnordered<_> = tasks.into_iter().collect();
 
     app.finish();
     app.cleanup();

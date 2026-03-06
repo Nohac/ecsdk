@@ -8,7 +8,6 @@ use tokio::sync::mpsc;
 use tokio::net::UnixListener;
 use tokio::signal::ctrl_c;
 
-use crate::app::TaskQueue;
 use crate::backend_mock::MockBackend;
 use crate::bridge::AppExit;
 use crate::container::*;
@@ -142,7 +141,7 @@ pub async fn run_daemon() {
         ("web-frontend", "myapp/web:latest", 2),
     ];
 
-    let (mut app, cmd_rx) = crate::app::setup();
+    let (mut app, cmd_rx, mut tasks) = crate::app::setup();
 
     // Infrastructure plugins required by replicon
     app.add_plugins(bevy::state::app::StatesPlugin);
@@ -197,31 +196,28 @@ pub async fn run_daemon() {
     eprintln!("Daemon listening on {SOCKET_PATH}");
 
     let accept_handler = handler.clone();
-    {
-        let mut tasks = app.world_mut().resource_mut::<TaskQueue>();
-        tasks.push(async move {
-            while let Ok((stream, _)) = listener.accept().await {
-                let dispatcher = RepliconTransportDispatcher::new(accept_handler.clone());
-                // Per-connection handler — genuine concurrency, spawn is correct
-                tokio::spawn(async move {
-                    match accept(stream, HandshakeConfig::default(), dispatcher).await {
-                        Ok((_handle, _incoming, driver)) => {
-                            let _ = driver.run().await;
-                        }
-                        Err(e) => eprintln!("Handshake failed: {e}"),
+    tasks.push(Box::pin(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            let dispatcher = RepliconTransportDispatcher::new(accept_handler.clone());
+            // Per-connection handler — genuine concurrency, spawn is correct
+            tokio::spawn(async move {
+                match accept(stream, HandshakeConfig::default(), dispatcher).await {
+                    Ok((_handle, _incoming, driver)) => {
+                        let _ = driver.run().await;
                     }
-                });
-            }
-        });
+                    Err(e) => eprintln!("Handshake failed: {e}"),
+                }
+            });
+        }
+    }));
 
-        // Ctrl+C
-        tasks.push(async move {
-            ctrl_c().await.ok();
-            cmd_sender.trigger(ShutdownAll);
-        });
-    }
+    // Ctrl+C
+    tasks.push(Box::pin(async move {
+        ctrl_c().await.ok();
+        cmd_sender.trigger(ShutdownAll);
+    }));
 
-    crate::app::run_async(app, cmd_rx).await;
+    crate::app::run_async(app, cmd_rx, tasks).await;
 
     // Cleanup
     let _ = std::fs::remove_file(SOCKET_PATH);
