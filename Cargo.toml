@@ -4,14 +4,14 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-bevy_app = "0.18.0"
-bevy_ecs = { version = "0.18.0", features = ["multi_threaded"] }
+bevy = { version = "0.18", default-features = false, features = ["bevy_state", "multi_threaded", "serialize"] }
+bevy_replicon = { version = "0.39", default-features = false, features = ["server", "client"] }
+serde = { version = "1.0", features = ["derive"] }
 tokio = { version = "1.49.0", features = ["full"] }
 rand = "0.9"
 crossterm = { version = "0.29", features = ["event-stream"] }
 futures-util = "0.3"
 clap = { version = "4", features = ["derive"] }
-enum_dispatch = "0.3.13"
 tokio-util = "0.7"
 roam = "0.6.0"
 roam-stream = "0.6.0"

@@ -7,8 +7,8 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Mutex;
 
-use bevy_app::prelude::*;
-use bevy_ecs::prelude::*;
+use bevy::app::prelude::*;
+use bevy::ecs::prelude::*;
 use clap::ValueEnum;
 use crossterm::event::{Event, EventStream};
 use futures_util::StreamExt;
@@ -81,7 +81,7 @@ impl CrosstermPlugin {
 }
 
 impl Plugin for CrosstermPlugin {
-    fn build(&self, app: &mut bevy_app::App) {
+    fn build(&self, app: &mut App) {
         app.add_systems(Update, build_merged_log_view);
         match self.mode {
             RenderMode::Tui => {

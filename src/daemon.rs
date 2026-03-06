@@ -1,216 +1,128 @@
 use std::collections::HashMap;
 
-use bevy_app::prelude::*;
-use bevy_ecs::prelude::*;
+use bevy::app::prelude::*;
+use bevy::ecs::prelude::*;
+use bevy_replicon::prelude::*;
 use roam_stream::{HandshakeConfig, accept};
+use tokio::sync::mpsc;
 use tokio::net::UnixListener;
 use tokio::signal::ctrl_c;
-use tokio::sync::broadcast;
 
 use crate::app::TaskQueue;
-use crate::backend::ContainerRuntime;
 use crate::backend_mock::MockBackend;
 use crate::bridge::AppExit;
 use crate::container::*;
-use crate::ipc::{ComposeDaemon, ComposeDaemonDispatcher, SOCKET_PATH};
+use crate::ipc::SOCKET_PATH;
 use crate::lifecycle::{Backend, LifecyclePlugin, ShutdownAll};
-use crate::protocol::{ContainerInfo, ContainerSnapshot, DaemonEvent, Phase};
+use crate::protocol::{LogEvent, ServerExitNotice, ShutdownRequest};
+use crate::replicon_transport::*;
 use crate::task::CommandSender;
 
-/// Resource holding the broadcast channel for IPC events.
-#[derive(Resource)]
-pub struct IpcBroadcast {
-    pub tx: broadcast::Sender<DaemonEvent>,
-}
-
-/// Tracked state per container for change detection.
-struct TrackedContainer {
-    phase: ContainerPhase,
-    downloaded: u64,
-    log_count: usize,
-}
-
-impl TrackedContainer {
-    /// Diff current state against tracked, returning events for any changes.
-    /// Updates tracked state in place.
-    fn diff(
-        &mut self,
-        id: &str,
-        phase: ContainerPhase,
-        progress: Option<&DownloadProgress>,
-        log_buf: &LogBuffer,
-    ) -> Vec<DaemonEvent> {
-        let mut events = Vec::new();
-
-        if self.phase != phase {
-            events.push(DaemonEvent::PhaseChanged {
-                id: id.to_string(),
-                phase: Phase::from(phase),
-            });
-            self.phase = phase;
-        }
-
-        if let Some(prog) = progress {
-            if prog.downloaded != self.downloaded {
-                events.push(DaemonEvent::Progress {
-                    id: id.to_string(),
-                    downloaded: prog.downloaded,
-                    total: prog.total,
-                });
-            }
-            self.downloaded = prog.downloaded;
-        } else {
-            self.downloaded = 0;
-        }
-
-        for line in &log_buf.lines[self.log_count..] {
-            events.push(DaemonEvent::Log {
-                id: id.to_string(),
-                text: line.text.clone(),
-            });
-        }
-        self.log_count = log_buf.lines.len();
-
-        events
-    }
-
-    /// Diff logs only (for system entity).
-    fn diff_logs(&mut self, id: &str, log_buf: &LogBuffer) -> Vec<DaemonEvent> {
-        let mut events = Vec::new();
-        for line in &log_buf.lines[self.log_count..] {
-            events.push(DaemonEvent::Log {
-                id: id.to_string(),
-                text: line.text.clone(),
-            });
-        }
-        self.log_count = log_buf.lines.len();
-        events
-    }
-}
-
-/// Build a full snapshot by querying the ECS world directly.
-fn build_snapshot(world: &mut World) -> Vec<ContainerSnapshot> {
-    let mut query = world.query_filtered::<(
-        &ContainerName,
-        &ImageRef,
-        &StartOrder,
-        &ContainerPhase,
-        Option<&DownloadProgress>,
-    ), Without<SystemEntity>>();
-
-    query
-        .iter(world)
-        .map(|(name, image, order, phase, progress)| {
-            let (dl, total) = progress.map(|p| (p.downloaded, p.total)).unwrap_or((0, 0));
-            ContainerSnapshot {
-                info: ContainerInfo {
-                    id: name.0.clone(),
-                    name: name.0.clone(),
-                    image: image.0.clone(),
-                    order: order.0,
-                },
-                phase: Phase::from(*phase),
-                downloaded: dl,
-                total,
-            }
-        })
-        .collect()
-}
-
-/// ECS system that diffs container state each tick and broadcasts changes.
-#[allow(clippy::type_complexity)]
-fn broadcast_events(
-    containers: Query<
-        (
-            &ContainerName,
-            &ContainerPhase,
-            Option<&DownloadProgress>,
-            &LogBuffer,
-        ),
-        Without<SystemEntity>,
-    >,
-    system_query: Query<(&ContainerName, &LogBuffer), With<SystemEntity>>,
-    broadcast: Res<IpcBroadcast>,
-    exit: Res<AppExit>,
-    mut tracked: Local<HashMap<String, TrackedContainer>>,
+/// ECS system that diffs LogBuffer line counts per entity and sends new lines
+/// as LogEvent via replicon server events.
+fn send_log_events(
+    mut commands: Commands,
+    query: Query<(Entity, &LogBuffer)>,
+    mut tracked: Local<HashMap<Entity, usize>>,
 ) {
-    for (name, phase, progress, log_buf) in &containers {
-        let id = name.0.clone();
-
-        let events = if let Some(prev) = tracked.get_mut(&id) {
-            prev.diff(&id, *phase, progress, log_buf)
-        } else {
-            tracked.insert(
-                id.clone(),
-                TrackedContainer {
-                    phase: *phase,
-                    downloaded: progress.map(|p| p.downloaded).unwrap_or(0),
-                    log_count: log_buf.lines.len(),
+    for (entity, log_buf) in &query {
+        let sent = tracked.get(&entity).copied().unwrap_or(0);
+        for line in &log_buf.lines[sent..] {
+            commands.server_trigger(ToClients {
+                mode: SendMode::Broadcast,
+                message: LogEvent {
+                    container_entity: entity,
+                    text: line.text.clone(),
                 },
-            );
-            vec![DaemonEvent::PhaseChanged {
-                id: id.clone(),
-                phase: Phase::from(*phase),
-            }]
-        };
-
-        for event in events {
-            let _ = broadcast.tx.send(event);
+            });
         }
-    }
-
-    for (name, log_buf) in &system_query {
-        let id = name.0.clone();
-        let prev = tracked.entry(id.clone()).or_insert(TrackedContainer {
-            phase: ContainerPhase::Pending,
-            downloaded: 0,
-            log_count: 0,
-        });
-        for event in prev.diff_logs(&id, log_buf) {
-            let _ = broadcast.tx.send(event);
-        }
-    }
-
-    if exit.0 {
-        let _ = broadcast.tx.send(DaemonEvent::Exit);
+        tracked.insert(entity, log_buf.lines.len());
     }
 }
 
-/// Roam service implementation for the daemon.
+/// ECS system that sends ServerExitNotice once when AppExit becomes true.
+fn send_exit_notice(mut commands: Commands, exit: Res<AppExit>, mut sent: Local<bool>) {
+    if exit.0 && !*sent {
+        commands.server_trigger(ToClients {
+            mode: SendMode::Broadcast,
+            message: ServerExitNotice,
+        });
+        *sent = true;
+    }
+}
+
+/// Observer: client requests shutdown → trigger ShutdownAll.
+fn handle_shutdown_request(
+    _trigger: On<FromClient<ShutdownRequest>>,
+    mut commands: Commands,
+) {
+    commands.trigger(ShutdownAll);
+}
+
+/// Roam service implementation for replicon transport.
 #[derive(Clone)]
-struct ComposeDaemonImpl {
-    event_tx: broadcast::Sender<DaemonEvent>,
+struct TransportImpl {
     cmd_tx: CommandSender,
 }
 
-impl ComposeDaemon for ComposeDaemonImpl {
-    async fn subscribe(&self, _cx: &roam::Context, events: roam::Tx<DaemonEvent>) {
-        // Subscribe FIRST to ensure no events are missed between snapshot and streaming
-        let mut rx = self.event_tx.subscribe();
+impl RepliconTransport for TransportImpl {
+    async fn replicate(
+        &self,
+        _cx: &roam::Context,
+        to_client: roam::Tx<RepliconPacket>,
+        mut from_client: roam::Rx<RepliconPacket>,
+    ) {
+        // Create mpsc channels for bridging roam ↔ ECS
+        let (to_client_tx, mut to_client_rx) = mpsc::unbounded_channel::<RepliconPacket>();
+        let (from_client_tx, from_client_rx) = mpsc::unbounded_channel::<RepliconPacket>();
 
-        // Build snapshot on-demand from the ECS world
-        let snapshot = self.cmd_tx.query(build_snapshot).await;
-        if events.send(&DaemonEvent::Snapshot(snapshot)).await.is_err() {
-            return;
-        }
+        // Spawn a ConnectedClient entity and register in the ServerBridge
+        let cmd_tx = self.cmd_tx.clone();
+        let client_entity = cmd_tx
+            .query(|world: &mut World| {
+                let client = world
+                    .spawn(ConnectedClient {
+                        max_size: 1200,
+                    })
+                    .id();
+                world.resource_mut::<ServerBridge>().clients.insert(
+                    client,
+                    ServerClientChannels {
+                        from_client_rx,
+                        to_client_tx,
+                    },
+                );
+                client
+            })
+            .await;
 
-        // Forward all subsequent events
-        loop {
-            match rx.recv().await {
-                Ok(event) => {
-                    if events.send(&event).await.is_err() {
-                        break;
-                    }
+        // Bidirectional forwarding: roam ↔ mpsc
+        let forward_to_client = async {
+            while let Some(packet) = to_client_rx.recv().await {
+                if to_client.send(&packet).await.is_err() {
+                    break;
                 }
-                Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(broadcast::error::RecvError::Closed) => break,
             }
-        }
-    }
+        };
 
-    async fn shutdown(&self, _cx: &roam::Context) -> Result<String, String> {
-        self.cmd_tx.trigger(ShutdownAll);
-        Ok("Shutdown initiated".into())
+        let forward_from_client = async {
+            while let Ok(Some(packet)) = from_client.recv().await {
+                let _ = from_client_tx.send(packet);
+            }
+        };
+
+        tokio::select! {
+            _ = forward_to_client => {}
+            _ = forward_from_client => {}
+        }
+
+        // Clean up on disconnect
+        cmd_tx.send(move |world: &mut World| {
+            world.resource_mut::<ServerBridge>().clients.remove(&client_entity);
+            if world.get_entity(client_entity).is_ok() {
+                world.despawn(client_entity);
+            }
+        });
     }
 
     async fn ping(&self, _cx: &roam::Context) -> Result<String, String> {
@@ -218,12 +130,10 @@ impl ComposeDaemon for ComposeDaemonImpl {
     }
 }
 
-/// Run the daemon process: ECS world + IPC server on a Unix socket.
+/// Run the daemon process: ECS world + replicon server + IPC on a Unix socket.
 pub async fn run_daemon() {
     // Clean up stale socket
     let _ = std::fs::remove_file(SOCKET_PATH);
-
-    let (broadcast_tx, _) = broadcast::channel::<DaemonEvent>(256);
 
     let containers = [
         ("postgres", "postgres:16", 0),
@@ -233,18 +143,32 @@ pub async fn run_daemon() {
     ];
 
     let (mut app, cmd_rx) = crate::app::setup();
+
+    // Infrastructure plugins required by replicon
+    app.add_plugins(bevy::state::app::StatesPlugin);
+    app.add_plugins(bevy::time::TimePlugin);
+
+    // Replicon plugins — tick every frame via PostUpdate
+    app.add_plugins(
+        RepliconPlugins
+            .build()
+            .set(ServerPlugin::new(PostUpdate)),
+    );
+    app.add_plugins(SharedReplicationPlugin);
+    app.add_plugins(RoamServerPlugin);
+
+    // Lifecycle + log/exit broadcast
     app.add_plugins(LifecyclePlugin);
-    app.insert_resource(IpcBroadcast {
-        tx: broadcast_tx.clone(),
-    });
     app.add_systems(
         Update,
-        broadcast_events
+        (send_log_events, send_exit_notice)
             .after(crate::lifecycle::enforce_ordering)
             .after(crate::lifecycle::check_all_running)
             .after(crate::lifecycle::check_all_stopped),
     );
+    app.add_observer(handle_shutdown_request);
 
+    // Spawn containers with Replicated marker
     for (name, image, order) in containers {
         app.world_mut().spawn((
             ContainerName(name.into()),
@@ -252,22 +176,23 @@ pub async fn run_daemon() {
             StartOrder(order),
             ContainerPhase::Pending,
             LogBuffer::default(),
-            Backend(ContainerRuntime::from(MockBackend::new(name, image))),
+            Backend(MockBackend::new(name, image)),
+            Replicated,
         ));
     }
     app.world_mut().spawn((
         ContainerName("[system]".into()),
         LogBuffer::default(),
         SystemEntity,
+        Replicated,
     ));
 
     let cmd_sender = app.world().resource::<CommandSender>().clone();
-    let handler = ComposeDaemonImpl {
-        event_tx: broadcast_tx,
+    let handler = TransportImpl {
         cmd_tx: cmd_sender.clone(),
     };
 
-    // IPC listener — task, not spawn
+    // IPC listener
     let listener = UnixListener::bind(SOCKET_PATH).expect("Failed to bind daemon socket");
     eprintln!("Daemon listening on {SOCKET_PATH}");
 
@@ -276,8 +201,8 @@ pub async fn run_daemon() {
         let mut tasks = app.world_mut().resource_mut::<TaskQueue>();
         tasks.push(async move {
             while let Ok((stream, _)) = listener.accept().await {
-                let dispatcher = ComposeDaemonDispatcher::new(accept_handler.clone());
-                // Per-connection handler IS genuine concurrency — spawn is correct here
+                let dispatcher = RepliconTransportDispatcher::new(accept_handler.clone());
+                // Per-connection handler — genuine concurrency, spawn is correct
                 tokio::spawn(async move {
                     match accept(stream, HandshakeConfig::default(), dispatcher).await {
                         Ok((_handle, _incoming, driver)) => {
@@ -289,7 +214,7 @@ pub async fn run_daemon() {
             }
         });
 
-        // Ctrl+C — task, not spawn
+        // Ctrl+C
         tasks.push(async move {
             ctrl_c().await.ok();
             cmd_sender.trigger(ShutdownAll);

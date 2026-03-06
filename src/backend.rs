@@ -1,7 +1,5 @@
-use enum_dispatch::enum_dispatch;
 use tokio::sync::mpsc;
 
-use crate::backend_mirror::MirrorBackend;
 use crate::backend_mock::MockBackend;
 
 pub struct PullProgress {
@@ -10,7 +8,6 @@ pub struct PullProgress {
 }
 
 #[allow(async_fn_in_trait)]
-#[enum_dispatch]
 pub trait ContainerBackend {
     /// Pull an image. Sends progress updates via `progress_tx` and log lines via `log_tx`.
     async fn pull_image(
@@ -26,9 +23,5 @@ pub trait ContainerBackend {
     async fn stop_container(&self) -> Result<(), String>;
 }
 
-#[derive(Clone)]
-#[enum_dispatch(ContainerBackend)]
-pub enum ContainerRuntime {
-    Mock(MockBackend),
-    Mirror(MirrorBackend),
-}
+/// Only MockBackend remains — MirrorBackend is replaced by replicon replication.
+pub type ContainerRuntime = MockBackend;

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use bevy_ecs::prelude::*;
+use bevy::ecs::prelude::*;
 
 use crate::container::*;
 

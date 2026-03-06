@@ -1,11 +1,11 @@
-use bevy_ecs::prelude::*;
+use bevy::ecs::prelude::*;
 
 use crate::backend::ContainerBackend;
 use crate::backend::ContainerRuntime;
 use crate::bridge::AppExit;
 use crate::container::*;
 use crate::task::SpawnTask;
-use bevy_app::prelude::*;
+use bevy::app::prelude::*;
 
 // ECS trigger events — co-located with the observers that handle them.
 
@@ -28,7 +28,7 @@ pub struct Backend(pub ContainerRuntime);
 pub struct LifecyclePlugin;
 
 impl Plugin for LifecyclePlugin {
-    fn build(&self, app: &mut bevy_app::App) {
+    fn build(&self, app: &mut App) {
         app.init_resource::<MergedLogView>();
         app.world_mut().add_observer(handle_download_complete);
         app.world_mut().add_observer(handle_boot_complete);

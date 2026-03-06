@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::io::{Write, stdout};
 
-use bevy_ecs::prelude::*;
+use bevy::ecs::prelude::*;
 use crossterm::{
     ExecutableCommand, QueueableCommand,
     cursor::{Hide, MoveTo, Show},

@@ -1,6 +1,5 @@
 pub mod app;
 pub mod backend;
-pub mod backend_mirror;
 pub mod backend_mock;
 pub mod bridge;
 pub mod client;
@@ -10,4 +9,5 @@ pub mod ipc;
 pub mod lifecycle;
 pub mod protocol;
 pub mod render;
+pub mod replicon_transport;
 pub mod task;

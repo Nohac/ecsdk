@@ -2,8 +2,8 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Mutex;
 
-use bevy_app::App;
-use bevy_ecs::prelude::*;
+use bevy::app::App;
+use bevy::ecs::prelude::*;
 use futures_util::StreamExt;
 use futures_util::stream::FuturesUnordered;
 use tokio::runtime::Handle;
@@ -40,6 +40,8 @@ pub async fn run_async(mut app: App, mut cmd_rx: mpsc::UnboundedReceiver<WorldCm
         .drain(..)
         .collect();
 
+    app.finish();
+    app.cleanup();
     app.update();
 
     loop {

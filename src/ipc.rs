@@ -1,25 +1,10 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-use roam::Tx;
 use roam_stream::Connector;
 use tokio::net::UnixStream;
 
-use crate::protocol::DaemonEvent;
-
 pub const SOCKET_PATH: &str = "/tmp/ecs-compose-daemon.sock";
-
-#[roam::service]
-pub trait ComposeDaemon {
-    /// Subscribe to real-time events. Daemon sends snapshot first, then deltas.
-    async fn subscribe(&self, events: Tx<DaemonEvent>);
-
-    /// Request graceful shutdown of all containers.
-    async fn shutdown(&self) -> Result<String, String>;
-
-    /// Health check — verifies the daemon is alive.
-    async fn ping(&self) -> Result<String, String>;
-}
 
 /// Connector for client-side Unix socket connections to the daemon.
 #[derive(Clone)]

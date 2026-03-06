@@ -1,4 +1,4 @@
-use bevy_ecs::prelude::*;
+use bevy::ecs::prelude::*;
 
 /// A closure that mutates the World. Sent through the channel by async tasks.
 pub type WorldCmd = Box<dyn FnOnce(&mut World) + Send>;

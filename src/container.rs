@@ -1,20 +1,19 @@
 use std::time::Instant;
 
-use bevy_ecs::prelude::*;
+use bevy::ecs::prelude::*;
+use serde::{Deserialize, Serialize};
 
-use crate::protocol::Phase;
-
-#[derive(Component)]
+#[derive(Component, Serialize, Deserialize)]
 pub struct ContainerName(pub String);
 
-#[derive(Component)]
+#[derive(Component, Serialize, Deserialize)]
 pub struct ImageRef(pub String);
 
 /// Lower starts first; containers with the same order start in parallel.
-#[derive(Component)]
+#[derive(Component, Serialize, Deserialize)]
 pub struct StartOrder(pub u32);
 
-#[derive(Component, PartialEq, Eq, Clone, Copy, Debug)]
+#[derive(Component, PartialEq, Eq, Clone, Copy, Debug, Serialize, Deserialize)]
 pub enum ContainerPhase {
     Pending,
     PullingImage,
@@ -39,35 +38,7 @@ impl ContainerPhase {
     }
 }
 
-impl From<ContainerPhase> for Phase {
-    fn from(p: ContainerPhase) -> Self {
-        match p {
-            ContainerPhase::Pending => Phase::Pending,
-            ContainerPhase::PullingImage => Phase::PullingImage,
-            ContainerPhase::Starting => Phase::Starting,
-            ContainerPhase::Running => Phase::Running,
-            ContainerPhase::Stopping => Phase::Stopping,
-            ContainerPhase::Stopped => Phase::Stopped,
-            ContainerPhase::Failed => Phase::Failed,
-        }
-    }
-}
-
-impl From<Phase> for ContainerPhase {
-    fn from(p: Phase) -> Self {
-        match p {
-            Phase::Pending => ContainerPhase::Pending,
-            Phase::PullingImage => ContainerPhase::PullingImage,
-            Phase::Starting => ContainerPhase::Starting,
-            Phase::Running => ContainerPhase::Running,
-            Phase::Stopping => ContainerPhase::Stopping,
-            Phase::Stopped => ContainerPhase::Stopped,
-            Phase::Failed => ContainerPhase::Failed,
-        }
-    }
-}
-
-#[derive(Component)]
+#[derive(Component, Serialize, Deserialize)]
 pub struct DownloadProgress {
     pub downloaded: u64,
     pub total: u64,
@@ -94,7 +65,7 @@ impl LogBuffer {
 }
 
 /// Marker for the system-wide log entity (global messages).
-#[derive(Component)]
+#[derive(Component, Serialize, Deserialize)]
 pub struct SystemEntity;
 
 /// A single merged log entry with its source entity and name.

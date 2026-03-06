@@ -1,6 +1,6 @@
 use std::future::Future;
 
-use bevy_ecs::prelude::*;
+use bevy::ecs::prelude::*;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::task::JoinHandle;
