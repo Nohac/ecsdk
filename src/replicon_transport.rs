@@ -3,21 +3,24 @@ use bevy::ecs::prelude::*;
 use bevy::state::prelude::*;
 use bevy_replicon::prelude::*;
 use futures_util::{SinkExt, StreamExt};
+use interprocess::local_socket::traits::tokio::Listener as _;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc;
 use tokio_util::bytes::Bytes;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
+use crate::bridge::AppExit;
 use crate::container::*;
 use crate::protocol::{LogEvent, ServerExitNotice, ShutdownRequest};
+use crate::task::SpawnTask;
 
 // ---------------------------------------------------------------------------
 // Packet type — [channel_id: u8][data...] inside a length-delimited frame
 // ---------------------------------------------------------------------------
 
-pub struct RepliconPacket {
-    pub channel_id: u8,
-    pub data: Vec<u8>,
+struct RepliconPacket {
+    channel_id: u8,
+    data: Vec<u8>,
 }
 
 impl RepliconPacket {
@@ -43,9 +46,7 @@ impl RepliconPacket {
 // Bidirectional bridge: framed stream ↔ mpsc channels
 // ---------------------------------------------------------------------------
 
-/// Run bidirectional forwarding between an async stream and mpsc channels.
-/// Returns when either direction disconnects.
-pub async fn run_bridge(
+async fn run_bridge(
     stream: impl AsyncRead + AsyncWrite + Send + Unpin,
     to_remote_rx: &mut mpsc::UnboundedReceiver<RepliconPacket>,
     from_remote_tx: &mpsc::UnboundedSender<RepliconPacket>,
@@ -98,19 +99,19 @@ impl Plugin for SharedReplicationPlugin {
 }
 
 // ---------------------------------------------------------------------------
-// Server-side bridge: mpsc channels between async I/O and ECS systems
+// Server transport plugin
 // ---------------------------------------------------------------------------
 
 use std::collections::HashMap;
 
-pub struct ServerClientChannels {
-    pub from_client_rx: mpsc::UnboundedReceiver<RepliconPacket>,
-    pub to_client_tx: mpsc::UnboundedSender<RepliconPacket>,
+struct ServerClientChannels {
+    from_client_rx: mpsc::UnboundedReceiver<RepliconPacket>,
+    to_client_tx: mpsc::UnboundedSender<RepliconPacket>,
 }
 
 #[derive(Resource, Default)]
-pub struct ServerBridge {
-    pub clients: HashMap<Entity, ServerClientChannels>,
+struct ServerBridge {
+    clients: HashMap<Entity, ServerClientChannels>,
 }
 
 pub struct ServerTransportPlugin;
@@ -128,7 +129,61 @@ impl Plugin for ServerTransportPlugin {
             PostUpdate,
             server_send_packets.in_set(ServerSystems::SendPackets),
         );
+        app.add_systems(Startup, spawn_server_listener);
     }
+}
+
+fn spawn_server_listener(mut commands: Commands) {
+
+    commands.spawn_empty().spawn_task(move |cmd| async move {
+        let listener = crate::ipc::create_listener().expect("Failed to bind daemon socket");
+        eprintln!("Daemon listening on {}", crate::ipc::SOCKET_PATH);
+
+        loop {
+            let stream = match listener.accept().await {
+                Ok(stream) => stream,
+                Err(e) => {
+                    eprintln!("Accept failed: {e}");
+                    continue;
+                }
+            };
+
+            let cmd = cmd.clone();
+            cmd.push(move |world: &mut World| {
+                let (to_client_tx, to_client_rx) = mpsc::unbounded_channel::<RepliconPacket>();
+                let (from_client_tx, from_client_rx) = mpsc::unbounded_channel::<RepliconPacket>();
+
+                let mut com = world.commands();
+                let mut client = com.spawn(ConnectedClient { max_size: 1200 });
+                let client_id = client.id();
+
+                client.spawn_task(move |client_cmd| async move {
+                    let mut to_client_rx = to_client_rx;
+                    let wake = client_cmd.clone();
+                    run_bridge(stream, &mut to_client_rx, &from_client_tx, move || {
+                        wake.push(|_: &mut World| {});
+                    })
+                    .await;
+
+                    let entity = client_cmd.entity();
+                    client_cmd.push(move |world: &mut World| {
+                        world.resource_mut::<ServerBridge>().clients.remove(&entity);
+                        if world.get_entity(entity).is_ok() {
+                            world.despawn(entity);
+                        }
+                    });
+                });
+
+                world.resource_mut::<ServerBridge>().clients.insert(
+                    client_id,
+                    ServerClientChannels {
+                        from_client_rx,
+                        to_client_tx,
+                    },
+                );
+            });
+        }
+    });
 }
 
 fn server_manage_state(
@@ -143,25 +198,15 @@ fn server_manage_state(
     }
 }
 
-fn server_receive_packets(
-    mut bridge: ResMut<ServerBridge>,
-    mut messages: ResMut<ServerMessages>,
-) {
+fn server_receive_packets(mut bridge: ResMut<ServerBridge>, mut messages: ResMut<ServerMessages>) {
     for (client_entity, channels) in &mut bridge.clients {
         while let Ok(packet) = channels.from_client_rx.try_recv() {
-            messages.insert_received(
-                *client_entity,
-                packet.channel_id as usize,
-                packet.data,
-            );
+            messages.insert_received(*client_entity, packet.channel_id as usize, packet.data);
         }
     }
 }
 
-fn server_send_packets(
-    mut messages: ResMut<ServerMessages>,
-    bridge: Res<ServerBridge>,
-) {
+fn server_send_packets(mut messages: ResMut<ServerMessages>, bridge: Res<ServerBridge>) {
     for (client_entity, channel_id, bytes) in messages.drain_sent() {
         if let Some(channels) = bridge.clients.get(&client_entity) {
             let _ = channels.to_client_tx.send(RepliconPacket {
@@ -173,13 +218,13 @@ fn server_send_packets(
 }
 
 // ---------------------------------------------------------------------------
-// Client-side bridge: mpsc channels between async I/O and ECS systems
+// Client transport plugin
 // ---------------------------------------------------------------------------
 
 #[derive(Resource)]
-pub struct ClientBridge {
-    pub from_server_rx: mpsc::UnboundedReceiver<RepliconPacket>,
-    pub to_server_tx: mpsc::UnboundedSender<RepliconPacket>,
+struct ClientBridge {
+    from_server_rx: mpsc::UnboundedReceiver<RepliconPacket>,
+    to_server_tx: mpsc::UnboundedSender<RepliconPacket>,
 }
 
 pub struct ClientTransportPlugin;
@@ -196,7 +241,44 @@ impl Plugin for ClientTransportPlugin {
             PostUpdate,
             client_send_packets.in_set(ClientSystems::SendPackets),
         );
+        app.add_systems(Startup, spawn_client_connection);
     }
+}
+
+fn spawn_client_connection(mut commands: Commands) {
+    commands.spawn_empty().spawn_task(move |cmd| async move {
+        let stream = match crate::ipc::connect().await {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("Failed to connect to daemon: {e}");
+                cmd.push(|world: &mut World| {
+                    world.resource_mut::<AppExit>().0 = true;
+                });
+                return;
+            }
+        };
+
+        let (to_server_tx, mut to_server_rx) = mpsc::unbounded_channel::<RepliconPacket>();
+        let (from_server_tx, from_server_rx) = mpsc::unbounded_channel::<RepliconPacket>();
+
+        cmd.push(move |world: &mut World| {
+            world.insert_resource(ClientBridge {
+                from_server_rx,
+                to_server_tx,
+            });
+        });
+
+        let wake = cmd.clone();
+        run_bridge(stream, &mut to_server_rx, &from_server_tx, move || {
+            wake.push(|_: &mut World| {});
+        })
+        .await;
+
+        cmd.push(|world: &mut World| {
+            world.remove_resource::<ClientBridge>();
+            world.resource_mut::<AppExit>().0 = true;
+        });
+    });
 }
 
 fn client_manage_state(
@@ -223,10 +305,7 @@ fn client_receive_packets(
     }
 }
 
-fn client_send_packets(
-    mut messages: ResMut<ClientMessages>,
-    bridge: Option<Res<ClientBridge>>,
-) {
+fn client_send_packets(mut messages: ResMut<ClientMessages>, bridge: Option<Res<ClientBridge>>) {
     let Some(bridge) = bridge.as_ref() else {
         return;
     };

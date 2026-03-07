@@ -115,6 +115,7 @@ impl SpawnTask for EntityCommands<'_> {
     }
 }
 
+
 struct SpawnTaskCmd<F>(F);
 
 impl<F, Fut> EntityCommand for SpawnTaskCmd<F>
