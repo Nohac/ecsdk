@@ -221,18 +221,12 @@ pub fn check_all_running(
     all_phases: Query<&ContainerPhase, Without<SystemEntity>>,
     mut logs: Query<&mut LogBuffer>,
     system_entity: Query<Entity, With<SystemEntity>>,
-    mut exit: ResMut<AppExit>,
 ) {
-    if exit.0 || all_phases.is_empty() {
-        return;
-    }
-    if all_phases.iter().all(|p| *p == ContainerPhase::Running) {
-        if let Ok(sys) = system_entity.single()
-            && let Ok(mut log_buf) = logs.get_mut(sys)
-        {
-            log_buf.push("All containers ready.");
-        }
-        exit.0 = true;
+    if all_phases.iter().all(|p| *p == ContainerPhase::Running)
+        && let Ok(sys) = system_entity.single()
+        && let Ok(mut log_buf) = logs.get_mut(sys)
+    {
+        log_buf.push("All containers ready.");
     }
 }
 

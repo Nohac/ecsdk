@@ -141,7 +141,7 @@ pub async fn run_daemon() {
         ("web-frontend", "myapp/web:latest", 2),
     ];
 
-    let (mut app, cmd_rx, mut tasks) = crate::app::setup();
+    let (mut app, cmd_rx) = crate::app::setup();
 
     // Infrastructure plugins required by replicon
     app.add_plugins(bevy::state::app::StatesPlugin);
@@ -196,7 +196,7 @@ pub async fn run_daemon() {
     eprintln!("Daemon listening on {SOCKET_PATH}");
 
     let accept_handler = handler.clone();
-    tasks.push(Box::pin(async move {
+    let accept_loop = async move {
         while let Ok((stream, _)) = listener.accept().await {
             let dispatcher = RepliconTransportDispatcher::new(accept_handler.clone());
             // Per-connection handler — genuine concurrency, spawn is correct
@@ -209,15 +209,18 @@ pub async fn run_daemon() {
                 }
             });
         }
-    }));
+    };
 
-    // Ctrl+C
-    tasks.push(Box::pin(async move {
+    // Ctrl+C triggers graceful shutdown (doesn't cancel run_async)
+    tokio::spawn(async move {
         ctrl_c().await.ok();
         cmd_sender.trigger(ShutdownAll);
-    }));
+    });
 
-    crate::app::run_async(app, cmd_rx, tasks).await;
+    tokio::select! {
+        _ = crate::app::run_async(app, cmd_rx) => {}
+        _ = accept_loop => {}
+    }
 
     // Cleanup
     let _ = std::fs::remove_file(SOCKET_PATH);

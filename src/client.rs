@@ -9,7 +9,7 @@ use crate::bridge::AppExit;
 use crate::container::*;
 use crate::ipc::{DaemonConnector, SOCKET_PATH};
 use crate::protocol::{LogEvent, ServerExitNotice, ShutdownRequest};
-use crate::render::{CrosstermPlugin, RenderMode};
+use crate::render::{CrosstermPlugin, RenderMode, TerminalEvent};
 use crate::replicon_transport::*;
 use crate::task::CommandSender;
 
@@ -31,9 +31,19 @@ fn on_server_exit(_trigger: On<ServerExitNotice>, mut exit: ResMut<AppExit>) {
     exit.0 = true;
 }
 
+/// Observer: Ctrl+C → send ShutdownRequest to server.
+fn on_ctrl_c(trigger: On<TerminalEvent>, mut commands: Commands) {
+    if let Event::Key(key) = &trigger.event().0
+        && key.code == KeyCode::Char('c')
+        && key.modifiers.contains(KeyModifiers::CONTROL)
+    {
+        commands.client_trigger(ShutdownRequest);
+    }
+}
+
 /// Run the client: connect to daemon via replicon, render.
 pub async fn run_client(mode: RenderMode) {
-    let (mut app, cmd_rx, mut tasks) = crate::app::setup();
+    let (mut app, cmd_rx) = crate::app::setup();
 
     // Infrastructure plugins required by replicon
     app.add_plugins(bevy::state::app::StatesPlugin);
@@ -44,10 +54,15 @@ pub async fn run_client(mode: RenderMode) {
     app.add_plugins(SharedReplicationPlugin);
     app.add_plugins(RoamClientPlugin);
 
-    // Observers for replicon events
+    // Rendering
+    app.add_plugins(CrosstermPlugin::new(mode));
+    app.init_resource::<MergedLogView>();
+
+    // Observers
     app.add_observer(on_remote_added);
     app.add_observer(on_log_event);
     app.add_observer(on_server_exit);
+    app.add_observer(on_ctrl_c);
 
     // Exit when disconnected after having been connected (fallback)
     app.add_systems(bevy::app::Update, |state: Res<State<ClientState>>,
@@ -60,30 +75,11 @@ pub async fn run_client(mode: RenderMode) {
         }
     });
 
-    // Merged log view resource (used by renderers)
-    app.init_resource::<MergedLogView>();
-
-    // Ctrl+C → send ShutdownRequest to server
-    let crossterm = CrosstermPlugin::new(mode).on_event(move |event, cmd| async move {
-        if let Event::Key(key) = event
-            && key.code == KeyCode::Char('c')
-            && key.modifiers.contains(KeyModifiers::CONTROL)
-        {
-            cmd.send(|world: &mut World| {
-                world.commands().client_trigger(ShutdownRequest);
-                world.flush();
-            });
-        }
-    });
-    if let Some(task) = crossterm.build(&mut app) {
-        tasks.push(task);
-    }
-
     let cmd_sender = app.world().resource::<CommandSender>().clone();
 
     // Async task: connect via roam, create bridge, forward packets
     let connect_sender = cmd_sender.clone();
-    tasks.push(Box::pin(async move {
+    let connection = async move {
         let connector = DaemonConnector::new(SOCKET_PATH);
         let roam_client = connect(connector, HandshakeConfig::default(), NoDispatcher);
         let client = RepliconTransportClient::new(roam_client);
@@ -141,7 +137,10 @@ pub async fn run_client(mode: RenderMode) {
             world.remove_resource::<ClientBridge>();
             world.resource_mut::<AppExit>().0 = true;
         });
-    }));
+    };
 
-    crate::app::run_async(app, cmd_rx, tasks).await;
+    tokio::select! {
+        _ = crate::app::run_async(app, cmd_rx) => {}
+        _ = connection => {}
+    }
 }
