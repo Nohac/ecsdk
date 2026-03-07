@@ -55,30 +55,32 @@ impl Plugin for CrosstermPlugin {
         app.add_systems(Update, build_merged_log_view);
         match self.mode {
             RenderMode::Tui => {
-                app.world_mut().insert_resource(TerminalGuard::new());
+                app.insert_resource(TerminalGuard::new());
                 app.insert_resource(TerminalSize::query_now());
-                app.add_systems(Update, tui::render_tui.after(build_merged_log_view));
                 app.add_systems(Startup, setup_crossterm);
+                app.add_systems(PostUpdate, tui::render_tui);
             }
             RenderMode::Plain => {
-                app.add_systems(Update, plain::render_plain);
+                app.add_systems(PostUpdate, plain::render_plain);
             }
         }
     }
 }
 
 fn setup_crossterm(mut commands: Commands) {
-    commands.spawn(CrosstermEntity).spawn_task(|cmd| async move {
-        let mut events = EventStream::new();
-        while let Some(Ok(event)) = events.next().await {
-            if let Event::Resize(cols, rows) = event {
-                cmd.push(move |world: &mut World| {
-                    let mut size = world.resource_mut::<TerminalSize>();
-                    size.cols = cols;
-                    size.rows = rows;
-                });
+    commands
+        .spawn(CrosstermEntity)
+        .spawn_task(|cmd| async move {
+            let mut events = EventStream::new();
+            while let Some(Ok(event)) = events.next().await {
+                if let Event::Resize(cols, rows) = event {
+                    cmd.push(move |world: &mut World| {
+                        let mut size = world.resource_mut::<TerminalSize>();
+                        size.cols = cols;
+                        size.rows = rows;
+                    });
+                }
+                cmd.trigger(TerminalEvent(event));
             }
-            cmd.trigger(TerminalEvent(event));
-        }
-    });
+        });
 }

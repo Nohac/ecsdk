@@ -104,9 +104,11 @@ impl RepliconTransport for TransportImpl {
             }
         };
 
+        let wake_tx = cmd_tx.clone();
         let forward_from_client = async {
             while let Ok(Some(packet)) = from_client.recv().await {
                 let _ = from_client_tx.send(packet);
+                wake_tx.send(|_: &mut World| {});
             }
         };
 
