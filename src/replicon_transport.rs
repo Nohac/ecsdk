@@ -9,8 +9,8 @@ use tokio::sync::mpsc;
 use tokio_util::bytes::Bytes;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
-use crate::bridge::AppExit;
 use crate::container::*;
+use crate::msg::{Msg, PacketsReady, SetAppExit};
 use crate::protocol::{LogEvent, ServerExitNotice, ShutdownRequest};
 use crate::task::SpawnTask;
 
@@ -133,8 +133,100 @@ impl Plugin for ServerTransportPlugin {
     }
 }
 
-fn spawn_server_listener(mut commands: Commands) {
+// ── Transport messages ──
 
+pub enum TransportMsg {
+    AcceptClient(AcceptClientCmd),
+    UnregisterClient(UnregisterClientCmd),
+    InsertClientBridge(InsertClientBridgeCmd),
+    RemoveClientBridge(RemoveClientBridgeCmd),
+}
+
+impl Msg for TransportMsg {
+    fn apply(self: Box<Self>, commands: &mut Commands) {
+        match *self {
+            Self::AcceptClient(cmd) => commands.queue(cmd),
+            Self::UnregisterClient(cmd) => commands.queue(cmd),
+            Self::InsertClientBridge(cmd) => commands.queue(cmd),
+            Self::RemoveClientBridge(cmd) => commands.queue(cmd),
+        }
+    }
+}
+
+pub struct AcceptClientCmd {
+    stream: interprocess::local_socket::tokio::Stream,
+}
+
+impl Command for AcceptClientCmd {
+    fn apply(self, world: &mut World) {
+        let (to_client_tx, to_client_rx) = mpsc::unbounded_channel::<RepliconPacket>();
+        let (from_client_tx, from_client_rx) = mpsc::unbounded_channel::<RepliconPacket>();
+
+        let mut com = world.commands();
+        let mut client = com.spawn(ConnectedClient { max_size: 1200 });
+        let client_id = client.id();
+
+        let stream = self.stream;
+        client.spawn_task(move |client_cmd| async move {
+            let mut to_client_rx = to_client_rx;
+            let wake = client_cmd.clone();
+            run_bridge(stream, &mut to_client_rx, &from_client_tx, move || {
+                wake.send(PacketsReady);
+            })
+            .await;
+
+            let entity = client_cmd.entity();
+            client_cmd.send(TransportMsg::UnregisterClient(UnregisterClientCmd { entity }));
+        });
+
+        world.flush();
+
+        world.resource_mut::<ServerBridge>().clients.insert(
+            client_id,
+            ServerClientChannels {
+                from_client_rx,
+                to_client_tx,
+            },
+        );
+    }
+}
+
+pub struct UnregisterClientCmd {
+    pub entity: Entity,
+}
+
+impl Command for UnregisterClientCmd {
+    fn apply(self, world: &mut World) {
+        world.resource_mut::<ServerBridge>().clients.remove(&self.entity);
+        if world.get_entity(self.entity).is_ok() {
+            world.despawn(self.entity);
+        }
+    }
+}
+
+pub struct InsertClientBridgeCmd {
+    from_server_rx: mpsc::UnboundedReceiver<RepliconPacket>,
+    to_server_tx: mpsc::UnboundedSender<RepliconPacket>,
+}
+
+impl Command for InsertClientBridgeCmd {
+    fn apply(self, world: &mut World) {
+        world.insert_resource(ClientBridge {
+            from_server_rx: self.from_server_rx,
+            to_server_tx: self.to_server_tx,
+        });
+    }
+}
+
+pub struct RemoveClientBridgeCmd;
+
+impl Command for RemoveClientBridgeCmd {
+    fn apply(self, world: &mut World) {
+        world.remove_resource::<ClientBridge>();
+    }
+}
+
+fn spawn_server_listener(mut commands: Commands) {
     commands.spawn_empty().spawn_task(move |cmd| async move {
         let listener = crate::ipc::create_listener().expect("Failed to bind daemon socket");
         eprintln!("Daemon listening on {}", crate::ipc::SOCKET_PATH);
@@ -148,40 +240,7 @@ fn spawn_server_listener(mut commands: Commands) {
                 }
             };
 
-            let cmd = cmd.clone();
-            cmd.push(move |world: &mut World| {
-                let (to_client_tx, to_client_rx) = mpsc::unbounded_channel::<RepliconPacket>();
-                let (from_client_tx, from_client_rx) = mpsc::unbounded_channel::<RepliconPacket>();
-
-                let mut com = world.commands();
-                let mut client = com.spawn(ConnectedClient { max_size: 1200 });
-                let client_id = client.id();
-
-                client.spawn_task(move |client_cmd| async move {
-                    let mut to_client_rx = to_client_rx;
-                    let wake = client_cmd.clone();
-                    run_bridge(stream, &mut to_client_rx, &from_client_tx, move || {
-                        wake.push(|_: &mut World| {});
-                    })
-                    .await;
-
-                    let entity = client_cmd.entity();
-                    client_cmd.push(move |world: &mut World| {
-                        world.resource_mut::<ServerBridge>().clients.remove(&entity);
-                        if world.get_entity(entity).is_ok() {
-                            world.despawn(entity);
-                        }
-                    });
-                });
-
-                world.resource_mut::<ServerBridge>().clients.insert(
-                    client_id,
-                    ServerClientChannels {
-                        from_client_rx,
-                        to_client_tx,
-                    },
-                );
-            });
+            cmd.send(TransportMsg::AcceptClient(AcceptClientCmd { stream }));
         }
     });
 }
@@ -251,9 +310,7 @@ fn spawn_client_connection(mut commands: Commands) {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("Failed to connect to daemon: {e}");
-                cmd.push(|world: &mut World| {
-                    world.resource_mut::<AppExit>().0 = true;
-                });
+                cmd.send(SetAppExit);
                 return;
             }
         };
@@ -261,23 +318,19 @@ fn spawn_client_connection(mut commands: Commands) {
         let (to_server_tx, mut to_server_rx) = mpsc::unbounded_channel::<RepliconPacket>();
         let (from_server_tx, from_server_rx) = mpsc::unbounded_channel::<RepliconPacket>();
 
-        cmd.push(move |world: &mut World| {
-            world.insert_resource(ClientBridge {
-                from_server_rx,
-                to_server_tx,
-            });
-        });
+        cmd.send(TransportMsg::InsertClientBridge(InsertClientBridgeCmd {
+            from_server_rx,
+            to_server_tx,
+        }));
 
         let wake = cmd.clone();
         run_bridge(stream, &mut to_server_rx, &from_server_tx, move || {
-            wake.push(|_: &mut World| {});
+            wake.send(PacketsReady);
         })
         .await;
 
-        cmd.push(|world: &mut World| {
-            world.remove_resource::<ClientBridge>();
-            world.resource_mut::<AppExit>().0 = true;
-        });
+        cmd.send(TransportMsg::RemoveClientBridge(RemoveClientBridgeCmd));
+        cmd.send(SetAppExit);
     });
 }
 

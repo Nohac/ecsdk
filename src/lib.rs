@@ -1,7 +1,7 @@
 pub mod app;
 pub mod backend;
 pub mod backend_mock;
-pub mod bridge;
+pub mod msg;
 pub mod client;
 pub mod container;
 pub mod daemon;

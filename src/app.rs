@@ -2,28 +2,35 @@ use bevy::app::App;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 
-use crate::bridge::{AppExit, WorldCmd};
-use crate::task::CommandSender;
+use crate::msg::{AppExit, Msg, Queue};
 
-pub fn setup() -> (App, mpsc::UnboundedReceiver<WorldCmd>) {
-    let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
+pub fn setup() -> (App, mpsc::UnboundedReceiver<Box<dyn Msg>>) {
+    let (msg_tx, msg_rx) = mpsc::unbounded_channel();
     let mut app = App::new();
-    app.insert_resource(CommandSender::new(cmd_tx, Handle::current()));
+    app.insert_resource(Queue::new(msg_tx, Handle::current()));
     app.init_resource::<AppExit>();
-    (app, cmd_rx)
+    (app, msg_rx)
 }
 
-pub async fn run_async(mut app: App, mut cmd_rx: mpsc::UnboundedReceiver<WorldCmd>) {
+pub async fn run_async(mut app: App, mut msg_rx: mpsc::UnboundedReceiver<Box<dyn Msg>>) {
     app.finish();
     app.cleanup();
     app.update();
 
     loop {
-        if let Some(cmd) = cmd_rx.recv().await {
-            cmd(app.world_mut());
+        if let Some(msg) = msg_rx.recv().await {
+            {
+                let mut cmds = app.world_mut().commands();
+                msg.apply(&mut cmds);
+            }
+            app.world_mut().flush();
         }
-        while let Ok(cmd) = cmd_rx.try_recv() {
-            cmd(app.world_mut());
+        while let Ok(msg) = msg_rx.try_recv() {
+            {
+                let mut cmds = app.world_mut().commands();
+                msg.apply(&mut cmds);
+            }
+            app.world_mut().flush();
         }
         app.update();
         if app.world().resource::<AppExit>().0 {

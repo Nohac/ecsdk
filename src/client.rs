@@ -4,8 +4,8 @@ use bevy::state::prelude::*;
 use bevy_replicon::prelude::*;
 use crossterm::event::{Event, KeyCode, KeyModifiers};
 
-use crate::bridge::AppExit;
 use crate::container::*;
+use crate::msg::AppExit;
 use crate::protocol::{LogEvent, ServerExitNotice, ShutdownRequest};
 use crate::render::{CrosstermPlugin, RenderMode, TerminalEvent};
 use crate::replicon_transport::*;
@@ -87,7 +87,7 @@ impl Plugin for ClientPlugin {
 // ---------------------------------------------------------------------------
 
 pub async fn run_client(mode: RenderMode) {
-    let (mut app, cmd_rx) = crate::app::setup();
+    let (mut app, msg_rx) = crate::app::setup();
     app.add_plugins(ClientPlugin(mode));
-    crate::app::run_async(app, cmd_rx).await;
+    crate::app::run_async(app, msg_rx).await;
 }

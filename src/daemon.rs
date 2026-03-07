@@ -6,9 +6,9 @@ use bevy_replicon::prelude::*;
 use tokio::signal::ctrl_c;
 
 use crate::backend_mock::MockBackend;
-use crate::bridge::AppExit;
 use crate::container::*;
 use crate::lifecycle::*;
+use crate::msg::{AppExit, TriggerEvent};
 use crate::protocol::{LogEvent, ServerExitNotice, ShutdownRequest};
 use crate::replicon_transport::*;
 use crate::task::SpawnTask;
@@ -88,7 +88,7 @@ impl Plugin for DaemonPlugin {
 fn spawn_ctrl_c_handler(mut commands: Commands) {
     commands.spawn_empty().spawn_task(move |cmd| async move {
         ctrl_c().await.ok();
-        cmd.trigger(ShutdownAll);
+        cmd.send(TriggerEvent(ShutdownAll));
     });
 }
 
@@ -104,7 +104,7 @@ pub async fn run_daemon() {
         ("web-frontend", "myapp/web:latest", 2),
     ];
 
-    let (mut app, cmd_rx) = crate::app::setup();
+    let (mut app, msg_rx) = crate::app::setup();
     app.add_plugins(DaemonPlugin);
 
     for (name, image, order) in containers {
@@ -133,7 +133,7 @@ pub async fn run_daemon() {
         Replicated,
     ));
 
-    crate::app::run_async(app, cmd_rx).await;
+    crate::app::run_async(app, msg_rx).await;
 
     let _ = std::fs::remove_file(crate::ipc::SOCKET_PATH);
     eprintln!("Daemon shut down");
