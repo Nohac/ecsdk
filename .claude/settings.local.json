@@ -1,16 +1,31 @@
 {
   "permissions": {
     "allow": [
-      "Bash(cargo build 2>&1)",
-      "Bash(cargo clippy 2>&1)",
-      "Bash(cargo run 2>&1)",
+      "Bash(cargo build:*)",
+      "Bash(cargo run:*)",
+      "Bash(cargo test:*)",
+      "Bash(cargo check:*)",
+      "Bash(cargo clippy:*)",
+      "Bash(cargo fmt:*)",
+      "Bash(cargo doc:*)",
+      "Bash(cargo add:*)",
+      "Bash(cargo fetch:*)",
+      "Bash(cargo search:*)",
+
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git reset:*)",
+
+      "Bash(rg:*)",
+      "Bash(wc:*)",
+      "Bash(timeout:*)",
+      "Bash(bash:*)",
+
       "WebFetch(domain:github.com)",
-      "Bash(wc -l /home/jonas/Development/Rust/ecstest/src/*.rs /home/jonas/Development/Rust/ecstest/src/**/*.rs)",
-      "Bash(cargo fmt 2>&1)",
-      "WebSearch",
-      "Bash(cargo doc --document-private-items -p crossterm 2>&1 | tail -5)",
-      "Bash(cargo clippy --fix --lib -p ecstest --allow-dirty 2>&1)",
-      "WebFetch(domain:raw.githubusercontent.com)"
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:crates.io)",
+      "WebFetch(domain:docs.rs)",
+      "WebSearch"
     ]
   }
 }
