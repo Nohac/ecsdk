@@ -1,7 +1,6 @@
 use std::time::Duration;
 
 use rand::Rng;
-use tokio::sync::mpsc;
 
 use crate::backend::{ContainerBackend, PullProgress};
 
@@ -23,29 +22,29 @@ impl MockBackend {
 impl ContainerBackend for MockBackend {
     async fn pull_image(
         &self,
-        progress_tx: mpsc::UnboundedSender<PullProgress>,
-        log_tx: mpsc::UnboundedSender<String>,
+        on_progress: impl Fn(PullProgress) + Send,
+        on_log: impl Fn(String) + Send,
     ) -> Result<(), String> {
-        let _ = log_tx.send(format!("Pulling {}...", self.image));
+        on_log(format!("Pulling {}...", self.image));
 
         // Pre-generate delays (ThreadRng is !Send)
         let delays: Vec<u64> = {
             let mut rng = rand::rng();
-            (0..10).map(|_| rng.random_range(200..=500)).collect()
+            (0..100).map(|_| rng.random_range(10..=60)).collect()
         };
 
         let total = 100_000_000u64;
         for (i, delay) in delays.into_iter().enumerate() {
             tokio::time::sleep(Duration::from_millis(delay)).await;
-            let downloaded = total * (i as u64 + 1) / 10;
-            let _ = progress_tx.send(PullProgress { downloaded, total });
+            let downloaded = total * (i as u64 + 1) / 100;
+            on_progress(PullProgress { downloaded, total });
         }
 
-        let _ = log_tx.send("Pull complete".to_string());
+        on_log("Pull complete".to_string());
         Ok(())
     }
 
-    async fn boot_container(&self, log_tx: mpsc::UnboundedSender<String>) -> Result<(), String> {
+    async fn boot_container(&self, on_log: impl Fn(String) + Send) -> Result<(), String> {
         let boot_lines: Vec<(&str, u64)> = match self.name.as_str() {
             "postgres" => vec![
                 ("PostgreSQL init process complete", 200),
@@ -68,7 +67,7 @@ impl ContainerBackend for MockBackend {
 
         for (text, delay) in boot_lines {
             tokio::time::sleep(Duration::from_millis(delay)).await;
-            let _ = log_tx.send(text.to_string());
+            on_log(text.to_string());
         }
 
         let startup_delay = { rand::rng().random_range(500..=1500u64) };

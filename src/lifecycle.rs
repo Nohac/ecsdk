@@ -77,36 +77,32 @@ pub fn enforce_ordering(
                     },
                 ))
                 .spawn_task(move |cmd| async move {
-                    let (progress_tx, mut progress_rx) =
-                        tokio::sync::mpsc::unbounded_channel::<crate::backend::PullProgress>();
-                    let (log_tx, mut log_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-
                     let entity = cmd.entity();
                     let cmd_progress = cmd.clone();
                     let cmd_logs = cmd.clone();
-                    let _ = tokio::join!(
-                        backend.pull_image(progress_tx, log_tx),
-                        async move {
-                            while let Some(p) = progress_rx.recv().await {
+                    let _ = backend
+                        .pull_image(
+                            move |p| {
                                 cmd_progress.push(move |world: &mut World| {
-                                    if let Some(mut dp) = world.get_mut::<DownloadProgress>(entity)
+                                    if let Some(mut dp) =
+                                        world.get_mut::<DownloadProgress>(entity)
                                     {
                                         dp.downloaded = p.downloaded;
                                         dp.total = p.total;
                                     }
                                 });
-                            }
-                        },
-                        async move {
-                            while let Some(text) = log_rx.recv().await {
+                            },
+                            move |text| {
                                 cmd_logs.push(move |world: &mut World| {
-                                    if let Some(mut log_buf) = world.get_mut::<LogBuffer>(entity) {
+                                    if let Some(mut log_buf) =
+                                        world.get_mut::<LogBuffer>(entity)
+                                    {
                                         log_buf.push(text);
                                     }
                                 });
-                            }
-                        },
-                    );
+                            },
+                        )
+                        .await;
                     cmd.trigger(DownloadComplete(entity));
                 });
         }
@@ -132,19 +128,17 @@ fn handle_download_complete(
         .entity(entity)
         .insert(ContainerPhase::Starting)
         .spawn_task(move |cmd| async move {
-            let (log_tx, mut log_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-
             let entity = cmd.entity();
             let cmd_logs = cmd.clone();
-            let _ = tokio::join!(backend.boot_container(log_tx), async move {
-                while let Some(text) = log_rx.recv().await {
+            let _ = backend
+                .boot_container(move |text| {
                     cmd_logs.push(move |world: &mut World| {
                         if let Some(mut log_buf) = world.get_mut::<LogBuffer>(entity) {
                             log_buf.push(text);
                         }
                     });
-                }
-            },);
+                })
+                .await;
             cmd.trigger(BootComplete(entity));
         });
 }
