@@ -10,16 +10,23 @@ pub trait Msg: Send + 'static {
 }
 
 /// Resource that bridges async tasks to the ECS world.
-/// Carries both the message channel sender and the Tokio runtime handle.
+/// Carries the message channel sender and an optional Tokio runtime handle.
 #[derive(Resource, Clone)]
 pub struct Queue {
     pub(crate) msg_tx: UnboundedSender<Box<dyn Msg>>,
-    pub(crate) handle: Handle,
+    pub(crate) handle: Option<Handle>,
 }
 
 impl Queue {
     pub fn new(msg_tx: UnboundedSender<Box<dyn Msg>>, handle: Handle) -> Self {
-        Self { msg_tx, handle }
+        Self { msg_tx, handle: Some(handle) }
+    }
+
+    /// Creates a no-op queue for testing. Messages are silently dropped
+    /// and async task spawning is disabled (no Tokio runtime needed).
+    pub fn test() -> Self {
+        let (msg_tx, _) = tokio::sync::mpsc::unbounded_channel();
+        Self { msg_tx, handle: None }
     }
 
     pub fn send(&self, msg: impl Msg) {

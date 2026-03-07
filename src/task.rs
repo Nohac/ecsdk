@@ -56,14 +56,16 @@ where
         let world = ewm.into_world_mut();
 
         let queue = world.resource::<Queue>().clone();
+        let Some(rt_handle) = queue.handle.clone() else {
+            return;
+        };
         let token = CancellationToken::new();
         let task_queue = TaskQueue::new(entity, queue.clone());
         let fut = (self.0)(task_queue);
         let child_token = token.child_token();
 
         let handle = {
-            let handle = queue.handle.clone();
-            handle.spawn(async move {
+            rt_handle.spawn(async move {
                 tokio::select! {
                     _ = fut => {
                         queue.send(TriggerEvent(TaskComplete(entity)));

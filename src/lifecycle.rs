@@ -368,6 +368,20 @@ fn handle_shutdown_all(
     queue.send(LifecycleMsg::RequestShutdown(RequestShutdownCmd));
 }
 
+// ── Test-only plugin (state machines without side-effect observers) ──
+
+/// Registers state machine infrastructure and resources without observers.
+/// Use for pure state machine tests that don't need async tasks or Queue.
+pub struct LifecycleTestPlugin;
+
+impl Plugin for LifecycleTestPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_plugins(StateMachinePlugin::default().schedule(PreUpdate));
+        app.init_resource::<MergedLogView>();
+        app.init_resource::<ShutdownRequested>();
+    }
+}
+
 // ── Plugin ──
 
 pub struct LifecyclePlugin;
@@ -391,5 +405,134 @@ impl Plugin for LifecyclePlugin {
 
         // ShutdownAll handler
         app.add_observer(handle_shutdown_all);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::container::{ContainerName, ContainerPhase, StartOrder};
+
+    fn test_app() -> App {
+        let mut app = App::new();
+        app.add_plugins(LifecycleTestPlugin);
+        app
+    }
+
+    fn spawn_container(app: &mut App, order: u32, state: impl Component + Clone) -> Entity {
+        app.world_mut()
+            .spawn((
+                ContainerName(format!("test-{order}")),
+                StartOrder(order),
+                ContainerPhase::Pending,
+                state,
+                build_container_sm(),
+                LogBuffer::default(),
+            ))
+            .id()
+    }
+
+    #[test]
+    fn pending_transitions_to_pulling_when_no_predecessors() {
+        let mut app = test_app();
+        let entity = spawn_container(&mut app, 0, Pending);
+
+        app.update();
+
+        assert!(app.world().get::<PullingImage>(entity).is_some());
+        assert_eq!(
+            app.world().get::<ContainerPhase>(entity),
+            Some(&ContainerPhase::PullingImage),
+        );
+    }
+
+    #[test]
+    fn pending_waits_for_predecessors() {
+        let mut app = test_app();
+        let _first = spawn_container(&mut app, 0, Pending);
+        let second = spawn_container(&mut app, 1, Pending);
+
+        app.update();
+
+        // First moved to PullingImage, second still Pending (waiting on first)
+        assert!(app.world().get::<Pending>(second).is_some());
+    }
+
+    #[test]
+    fn pulling_transitions_to_starting_on_done() {
+        let mut app = test_app();
+        let entity = spawn_container(&mut app, 0, Pending);
+
+        app.update(); // Pending → PullingImage
+
+        app.world_mut().entity_mut(entity).insert(Done::Success);
+        app.update(); // PullingImage → Starting
+
+        assert!(app.world().get::<Starting>(entity).is_some());
+    }
+
+    #[test]
+    fn full_lifecycle_pending_to_stopped() {
+        let mut app = test_app();
+        let entity = spawn_container(&mut app, 0, Pending);
+
+        app.update(); // Pending → PullingImage
+        assert!(app.world().get::<PullingImage>(entity).is_some());
+
+        app.world_mut().entity_mut(entity).insert(Done::Success);
+        app.update(); // PullingImage → Starting
+        assert!(app.world().get::<Starting>(entity).is_some());
+
+        app.world_mut().entity_mut(entity).insert(Done::Success);
+        app.update(); // Starting → Running
+        assert!(app.world().get::<Running>(entity).is_some());
+
+        app.world_mut().resource_mut::<ShutdownRequested>().0 = true;
+        app.update(); // Running → Stopping
+        assert!(app.world().get::<Stopping>(entity).is_some());
+
+        app.world_mut().entity_mut(entity).insert(Done::Success);
+        app.update(); // Stopping → Stopped
+        assert!(app.world().get::<Stopped>(entity).is_some());
+        assert_eq!(
+            app.world().get::<ContainerPhase>(entity),
+            Some(&ContainerPhase::Stopped),
+        );
+    }
+
+    #[test]
+    fn shutdown_interrupts_pulling() {
+        let mut app = test_app();
+        let entity = spawn_container(&mut app, 0, Pending);
+
+        app.update(); // Pending → PullingImage
+
+        app.world_mut().resource_mut::<ShutdownRequested>().0 = true;
+        app.update(); // PullingImage → Stopping
+
+        assert!(app.world().get::<Stopping>(entity).is_some());
+    }
+
+    #[test]
+    fn orchestrator_transitions_to_all_running() {
+        let mut app = test_app();
+        let c1 = spawn_container(&mut app, 0, Pending);
+        let c2 = spawn_container(&mut app, 0, Pending);
+        let _orch = app.world_mut().spawn((Deploying, build_orchestrator_sm())).id();
+
+        app.update(); // both Pending → PullingImage
+
+        // Drive both to Running
+        app.world_mut().entity_mut(c1).insert(Done::Success);
+        app.world_mut().entity_mut(c2).insert(Done::Success);
+        app.update(); // PullingImage → Starting
+
+        app.world_mut().entity_mut(c1).insert(Done::Success);
+        app.world_mut().entity_mut(c2).insert(Done::Success);
+        app.update(); // Starting → Running
+
+        app.update(); // orchestrator sees all Running → AllRunning
+
+        assert!(app.world().get::<AllRunning>(_orch).is_some());
     }
 }
