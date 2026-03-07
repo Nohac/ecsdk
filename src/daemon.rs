@@ -3,15 +3,14 @@ use std::collections::HashMap;
 use bevy::app::prelude::*;
 use bevy::ecs::prelude::*;
 use bevy_replicon::prelude::*;
-use roam_stream::{HandshakeConfig, accept};
 use tokio::sync::mpsc;
-use tokio::net::UnixListener;
 use tokio::signal::ctrl_c;
+
+use interprocess::local_socket::traits::tokio::Listener as _;
 
 use crate::backend_mock::MockBackend;
 use crate::bridge::AppExit;
 use crate::container::*;
-use crate::ipc::SOCKET_PATH;
 use crate::lifecycle::*;
 use crate::protocol::{LogEvent, ServerExitNotice, ShutdownRequest};
 use crate::replicon_transport::*;
@@ -58,84 +57,8 @@ fn handle_shutdown_request(
     commands.trigger(ShutdownAll);
 }
 
-/// Roam service implementation for replicon transport.
-#[derive(Clone)]
-struct TransportImpl {
-    cmd_tx: CommandSender,
-}
-
-impl RepliconTransport for TransportImpl {
-    async fn replicate(
-        &self,
-        _cx: &roam::Context,
-        to_client: roam::Tx<RepliconPacket>,
-        mut from_client: roam::Rx<RepliconPacket>,
-    ) {
-        // Create mpsc channels for bridging roam ↔ ECS
-        let (to_client_tx, mut to_client_rx) = mpsc::unbounded_channel::<RepliconPacket>();
-        let (from_client_tx, from_client_rx) = mpsc::unbounded_channel::<RepliconPacket>();
-
-        // Spawn a ConnectedClient entity and register in the ServerBridge
-        let cmd_tx = self.cmd_tx.clone();
-        let client_entity = cmd_tx
-            .query(|world: &mut World| {
-                let client = world
-                    .spawn(ConnectedClient {
-                        max_size: 1200,
-                    })
-                    .id();
-                world.resource_mut::<ServerBridge>().clients.insert(
-                    client,
-                    ServerClientChannels {
-                        from_client_rx,
-                        to_client_tx,
-                    },
-                );
-                client
-            })
-            .await;
-
-        // Bidirectional forwarding: roam ↔ mpsc
-        let forward_to_client = async {
-            while let Some(packet) = to_client_rx.recv().await {
-                if to_client.send(&packet).await.is_err() {
-                    break;
-                }
-            }
-        };
-
-        let wake_tx = cmd_tx.clone();
-        let forward_from_client = async {
-            while let Ok(Some(packet)) = from_client.recv().await {
-                let _ = from_client_tx.send(packet);
-                wake_tx.send(|_: &mut World| {});
-            }
-        };
-
-        tokio::select! {
-            _ = forward_to_client => {}
-            _ = forward_from_client => {}
-        }
-
-        // Clean up on disconnect
-        cmd_tx.send(move |world: &mut World| {
-            world.resource_mut::<ServerBridge>().clients.remove(&client_entity);
-            if world.get_entity(client_entity).is_ok() {
-                world.despawn(client_entity);
-            }
-        });
-    }
-
-    async fn ping(&self, _cx: &roam::Context) -> Result<String, String> {
-        Ok("pong".into())
-    }
-}
-
-/// Run the daemon process: ECS world + replicon server + IPC on a Unix socket.
+/// Run the daemon process: ECS world + replicon server + IPC on a local socket.
 pub async fn run_daemon() {
-    // Clean up stale socket
-    let _ = std::fs::remove_file(SOCKET_PATH);
-
     let containers = [
         ("postgres", "postgres:16", 0),
         ("redis", "redis:7", 0),
@@ -156,7 +79,7 @@ pub async fn run_daemon() {
             .set(ServerPlugin::new(PostUpdate)),
     );
     app.add_plugins(SharedReplicationPlugin);
-    app.add_plugins(RoamServerPlugin);
+    app.add_plugins(ServerTransportPlugin);
 
     // Lifecycle + log/exit broadcast
     app.add_plugins(LifecyclePlugin);
@@ -192,26 +115,63 @@ pub async fn run_daemon() {
     ));
 
     let cmd_sender = app.world().resource::<CommandSender>().clone();
-    let handler = TransportImpl {
-        cmd_tx: cmd_sender.clone(),
-    };
 
     // IPC listener
-    let listener = UnixListener::bind(SOCKET_PATH).expect("Failed to bind daemon socket");
-    eprintln!("Daemon listening on {SOCKET_PATH}");
+    let listener = crate::ipc::create_listener().expect("Failed to bind daemon socket");
+    eprintln!("Daemon listening on {}", crate::ipc::SOCKET_PATH);
 
-    let accept_handler = handler.clone();
+    let accept_sender = cmd_sender.clone();
     let accept_loop = async move {
-        while let Ok((stream, _)) = listener.accept().await {
-            let dispatcher = RepliconTransportDispatcher::new(accept_handler.clone());
-            // Per-connection handler — genuine concurrency, spawn is correct
-            tokio::spawn(async move {
-                match accept(stream, HandshakeConfig::default(), dispatcher).await {
-                    Ok((_handle, _incoming, driver)) => {
-                        let _ = driver.run().await;
-                    }
-                    Err(e) => eprintln!("Handshake failed: {e}"),
+        loop {
+            let stream = match listener.accept().await {
+                Ok(stream) => stream,
+                Err(e) => {
+                    eprintln!("Accept failed: {e}");
+                    continue;
                 }
+            };
+
+            let cmd_tx = accept_sender.clone();
+
+            // Per-connection handler
+            tokio::spawn(async move {
+                // Create mpsc channels for bridging stream ↔ ECS
+                let (to_client_tx, mut to_client_rx) = mpsc::unbounded_channel::<RepliconPacket>();
+                let (from_client_tx, from_client_rx) = mpsc::unbounded_channel::<RepliconPacket>();
+
+                // Spawn a ConnectedClient entity and register in the ServerBridge
+                let client_entity = cmd_tx
+                    .query(|world: &mut World| {
+                        let client = world
+                            .spawn(ConnectedClient { max_size: 1200 })
+                            .id();
+                        world.resource_mut::<ServerBridge>().clients.insert(
+                            client,
+                            ServerClientChannels {
+                                from_client_rx,
+                                to_client_tx,
+                            },
+                        );
+                        client
+                    })
+                    .await;
+
+                let wake_tx = cmd_tx.clone();
+                run_bridge(stream, &mut to_client_rx, &from_client_tx, move || {
+                    wake_tx.send(|_: &mut World| {});
+                })
+                .await;
+
+                // Clean up on disconnect
+                cmd_tx.send(move |world: &mut World| {
+                    world
+                        .resource_mut::<ServerBridge>()
+                        .clients
+                        .remove(&client_entity);
+                    if world.get_entity(client_entity).is_ok() {
+                        world.despawn(client_entity);
+                    }
+                });
             });
         }
     };
@@ -228,6 +188,6 @@ pub async fn run_daemon() {
     }
 
     // Cleanup
-    let _ = std::fs::remove_file(SOCKET_PATH);
+    let _ = std::fs::remove_file(crate::ipc::SOCKET_PATH);
     eprintln!("Daemon shut down");
 }

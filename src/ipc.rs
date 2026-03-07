@@ -1,29 +1,23 @@
 use std::io;
-use std::path::{Path, PathBuf};
 
-use roam_stream::Connector;
-use tokio::net::UnixStream;
+use interprocess::local_socket::{
+    tokio::{prelude::*, Listener, Stream},
+    GenericFilePath, ListenerOptions,
+};
 
 pub const SOCKET_PATH: &str = "/tmp/ecs-compose-daemon.sock";
 
-/// Connector for client-side Unix socket connections to the daemon.
-#[derive(Clone)]
-pub struct DaemonConnector {
-    pub path: PathBuf,
+pub fn socket_name() -> interprocess::local_socket::Name<'static> {
+    SOCKET_PATH.to_fs_name::<GenericFilePath>().unwrap()
 }
 
-impl DaemonConnector {
-    pub fn new(path: impl AsRef<Path>) -> Self {
-        Self {
-            path: path.as_ref().to_path_buf(),
-        }
-    }
+pub fn create_listener() -> io::Result<Listener> {
+    let _ = std::fs::remove_file(SOCKET_PATH);
+    ListenerOptions::new()
+        .name(socket_name())
+        .create_tokio()
 }
 
-impl Connector for DaemonConnector {
-    type Transport = UnixStream;
-
-    async fn connect(&self) -> io::Result<UnixStream> {
-        UnixStream::connect(&self.path).await
-    }
+pub async fn connect() -> io::Result<Stream> {
+    Stream::connect(socket_name()).await
 }

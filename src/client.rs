@@ -2,12 +2,10 @@ use bevy::ecs::prelude::*;
 use bevy::state::prelude::*;
 use bevy_replicon::prelude::*;
 use crossterm::event::{Event, KeyCode, KeyModifiers};
-use roam_stream::{HandshakeConfig, NoDispatcher, connect};
 use tokio::sync::mpsc;
 
 use crate::bridge::AppExit;
 use crate::container::*;
-use crate::ipc::{DaemonConnector, SOCKET_PATH};
 use crate::protocol::{LogEvent, ServerExitNotice, ShutdownRequest};
 use crate::render::{CrosstermPlugin, RenderMode, TerminalEvent};
 use crate::replicon_transport::*;
@@ -52,7 +50,7 @@ pub async fn run_client(mode: RenderMode) {
     // Replicon plugins
     app.add_plugins(RepliconPlugins);
     app.add_plugins(SharedReplicationPlugin);
-    app.add_plugins(RoamClientPlugin);
+    app.add_plugins(ClientTransportPlugin);
 
     // Rendering
     app.add_plugins(CrosstermPlugin::new(mode));
@@ -77,22 +75,23 @@ pub async fn run_client(mode: RenderMode) {
 
     let cmd_sender = app.world().resource::<CommandSender>().clone();
 
-    // Async task: connect via roam, create bridge, forward packets
+    // Async task: connect via local socket, bridge packets
     let connect_sender = cmd_sender.clone();
     let connection = async move {
-        let connector = DaemonConnector::new(SOCKET_PATH);
-        let roam_client = connect(connector, HandshakeConfig::default(), NoDispatcher);
-        let client = RepliconTransportClient::new(roam_client);
+        let stream = match crate::ipc::connect().await {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("Failed to connect to daemon: {e}");
+                connect_sender.send(|world: &mut World| {
+                    world.resource_mut::<AppExit>().0 = true;
+                });
+                return;
+            }
+        };
 
-        // Create mpsc channels for bridging roam ↔ ECS
+        // Create mpsc channels for bridging stream ↔ ECS
         let (to_server_tx, mut to_server_rx) = mpsc::unbounded_channel::<RepliconPacket>();
         let (from_server_tx, from_server_rx) = mpsc::unbounded_channel::<RepliconPacket>();
-
-        // Create roam channel pairs for bidirectional streaming:
-        // to_client: server writes → client reads
-        let (to_client_tx, mut to_client_rx) = roam::channel::<RepliconPacket>();
-        // from_client: client writes → server reads
-        let (from_client_tx, from_client_rx) = roam::channel::<RepliconPacket>();
 
         // Insert the ClientBridge resource
         connect_sender.send(move |world: &mut World| {
@@ -102,35 +101,11 @@ pub async fn run_client(mode: RenderMode) {
             });
         });
 
-        // Call replicate() — passes Tx for server→client, Rx for client→server
-        let replicate_fut = async {
-            let _ = client.replicate(to_client_tx, from_client_rx).await;
-        };
-
-        // Forward: roam to_client_rx → mpsc from_server_tx (server→client→ECS)
-        // Send a no-op command to wake the event loop so app.update() runs.
         let wake_sender = connect_sender.clone();
-        let forward_from_server = async {
-            while let Ok(Some(packet)) = to_client_rx.recv().await {
-                let _ = from_server_tx.send(packet);
-                wake_sender.send(|_: &mut World| {});
-            }
-        };
-
-        // Forward: mpsc to_server_rx → roam from_client_tx (ECS→client→server)
-        let forward_to_server = async {
-            while let Some(packet) = to_server_rx.recv().await {
-                if from_client_tx.send(&packet).await.is_err() {
-                    break;
-                }
-            }
-        };
-
-        tokio::select! {
-            _ = replicate_fut => {}
-            _ = forward_from_server => {}
-            _ = forward_to_server => {}
-        }
+        run_bridge(stream, &mut to_server_rx, &from_server_tx, move || {
+            wake_sender.send(|_: &mut World| {});
+        })
+        .await;
 
         // Disconnected — signal exit
         connect_sender.send(|world: &mut World| {
