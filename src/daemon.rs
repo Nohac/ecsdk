@@ -12,7 +12,7 @@ use crate::backend_mock::MockBackend;
 use crate::bridge::AppExit;
 use crate::container::*;
 use crate::ipc::SOCKET_PATH;
-use crate::lifecycle::{Backend, LifecyclePlugin, ShutdownAll};
+use crate::lifecycle::*;
 use crate::protocol::{LogEvent, ServerExitNotice, ShutdownRequest};
 use crate::replicon_transport::*;
 use crate::task::CommandSender;
@@ -160,13 +160,7 @@ pub async fn run_daemon() {
 
     // Lifecycle + log/exit broadcast
     app.add_plugins(LifecyclePlugin);
-    app.add_systems(
-        Update,
-        (send_log_events, send_exit_notice)
-            .after(crate::lifecycle::enforce_ordering)
-            .after(crate::lifecycle::check_all_running)
-            .after(crate::lifecycle::check_all_stopped),
-    );
+    app.add_systems(Update, (send_log_events, send_exit_notice));
     app.add_observer(handle_shutdown_request);
 
     // Spawn containers with Replicated marker
@@ -176,11 +170,20 @@ pub async fn run_daemon() {
             ImageRef(image.into()),
             StartOrder(order),
             ContainerPhase::Pending,
+            Pending,
+            build_container_sm(),
             LogBuffer::default(),
             Backend(MockBackend::new(name, image)),
             Replicated,
         ));
     }
+
+    // Orchestrator entity
+    app.world_mut().spawn((
+        Deploying,
+        build_orchestrator_sm(),
+    ));
+
     app.world_mut().spawn((
         ContainerName("[system]".into()),
         LogBuffer::default(),

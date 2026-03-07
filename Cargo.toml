@@ -16,3 +16,4 @@ tokio-util = "0.7"
 roam = "0.6.0"
 roam-stream = "0.6.0"
 facet = "0.43"
+seldom_state = { git = "https://github.com/Wiwip/seldom_state.git", rev = "cc6c89f" }

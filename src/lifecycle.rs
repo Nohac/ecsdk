@@ -1,245 +1,349 @@
+use bevy::app::prelude::*;
 use bevy::ecs::prelude::*;
+use seldom_state::prelude::*;
 
 use crate::backend::ContainerBackend;
 use crate::backend::ContainerRuntime;
 use crate::bridge::AppExit;
 use crate::container::*;
-use crate::task::SpawnTask;
-use bevy::app::prelude::*;
+use crate::task::{CommandSender, SpawnTask};
 
-// ECS trigger events — co-located with the observers that handle them.
+// ── State components (container lifecycle) ──
 
-#[derive(Event)]
-pub struct DownloadComplete(pub Entity);
+#[derive(Component, Clone)]
+pub struct Pending;
 
-#[derive(Event)]
-pub struct BootComplete(pub Entity);
+#[derive(Component, Clone)]
+pub struct PullingImage;
+
+#[derive(Component, Clone)]
+pub struct Starting;
+
+#[derive(Component, Clone)]
+pub struct Running;
+
+#[derive(Component, Clone)]
+pub struct Stopping;
+
+#[derive(Component, Clone)]
+pub struct Stopped;
+
+// ── State components (orchestrator) ──
+
+#[derive(Component, Clone)]
+pub struct Deploying;
+
+#[derive(Component, Clone)]
+pub struct AllRunning;
+
+#[derive(Component, Clone)]
+pub struct ShuttingDown;
+
+#[derive(Component, Clone)]
+pub struct AllStopped;
+
+// ── Events and resources ──
 
 #[derive(Event)]
 pub struct ShutdownAll;
 
-#[derive(Event)]
-pub struct ShutdownComplete(pub Entity);
+#[derive(Resource, Default)]
+pub struct ShutdownRequested(pub bool);
 
 /// Per-entity backend that knows which container it manages.
 #[derive(Component, Clone)]
 pub struct Backend(pub ContainerRuntime);
 
-pub struct LifecyclePlugin;
+// ── Triggers ──
 
-impl Plugin for LifecyclePlugin {
-    fn build(&self, app: &mut App) {
-        app.init_resource::<MergedLogView>();
-        app.world_mut().add_observer(handle_download_complete);
-        app.world_mut().add_observer(handle_boot_complete);
-        app.world_mut().add_observer(handle_shutdown_all);
-        app.world_mut().add_observer(handle_shutdown_complete);
-        app.add_systems(Update, enforce_ordering)
-            .add_systems(Update, check_all_running)
-            .add_systems(Update, check_all_stopped);
-    }
+fn predecessors_ready(
+    In(entity): In<Entity>,
+    this: Query<&StartOrder>,
+    all: Query<(&StartOrder, Has<Running>, Has<Stopped>)>,
+) -> bool {
+    let Ok(order) = this.get(entity) else {
+        return false;
+    };
+    all.iter().all(|(other_order, is_running, is_stopped)| {
+        if other_order.0 < order.0 {
+            is_running || is_stopped
+        } else {
+            true
+        }
+    })
 }
 
-/// Queries Pending containers. If all containers with a lower StartOrder
-/// are >= Running, transitions this container to PullingImage and spawns
-/// an async download task via the backend.
-pub fn enforce_ordering(
-    mut commands: Commands,
-    pending: Query<(Entity, &StartOrder, &ContainerPhase, &Backend)>,
-    all: Query<(&StartOrder, &ContainerPhase)>,
-) {
-    for (entity, order, phase, backend) in &pending {
-        if *phase != ContainerPhase::Pending {
-            continue;
-        }
-
-        let predecessors_ready = all.iter().all(|(other_order, other_phase)| {
-            if other_order.0 < order.0 {
-                matches!(
-                    other_phase,
-                    ContainerPhase::Running | ContainerPhase::Stopped
-                )
-            } else {
-                true
-            }
-        });
-
-        if predecessors_ready {
-            let backend = backend.0.clone();
-
-            commands
-                .entity(entity)
-                .insert((
-                    ContainerPhase::PullingImage,
-                    DownloadProgress {
-                        downloaded: 0,
-                        total: 0,
-                    },
-                ))
-                .spawn_task(move |cmd| async move {
-                    let entity = cmd.entity();
-                    let cmd_progress = cmd.clone();
-                    let cmd_logs = cmd.clone();
-                    let _ = backend
-                        .pull_image(
-                            move |p| {
-                                cmd_progress.push(move |world: &mut World| {
-                                    if let Some(mut dp) =
-                                        world.get_mut::<DownloadProgress>(entity)
-                                    {
-                                        dp.downloaded = p.downloaded;
-                                        dp.total = p.total;
-                                    }
-                                });
-                            },
-                            move |text| {
-                                cmd_logs.push(move |world: &mut World| {
-                                    if let Some(mut log_buf) =
-                                        world.get_mut::<LogBuffer>(entity)
-                                    {
-                                        log_buf.push(text);
-                                    }
-                                });
-                            },
-                        )
-                        .await;
-                    cmd.trigger(DownloadComplete(entity));
-                });
-        }
-    }
+fn has_done(In(entity): In<Entity>, dones: Query<&Done>) -> bool {
+    dones.get(entity).is_ok()
 }
 
-/// Observer: DownloadComplete -> set phase to Starting, spawn boot task via backend.
-fn handle_download_complete(
-    trigger: On<DownloadComplete>,
+fn shutdown_requested(In(_entity): In<Entity>, flag: Res<ShutdownRequested>) -> bool {
+    flag.0
+}
+
+fn all_containers_running(
+    In(_entity): In<Entity>,
+    containers: Query<Has<Running>, (With<StartOrder>, Without<SystemEntity>)>,
+) -> bool {
+    !containers.is_empty() && containers.iter().all(|r| r)
+}
+
+fn all_containers_stopped(
+    In(_entity): In<Entity>,
+    containers: Query<Has<Stopped>, (With<StartOrder>, Without<SystemEntity>)>,
+) -> bool {
+    !containers.is_empty() && containers.iter().all(|s| s)
+}
+
+// ── State machine builders ──
+
+pub fn build_container_sm() -> StateMachine {
+    StateMachine::default()
+        .trans::<Pending, _>(predecessors_ready, PullingImage)
+        .on_enter::<PullingImage>(|e| {
+            e.insert(ContainerPhase::PullingImage);
+        })
+        .trans::<PullingImage, _>(has_done, Starting)
+        .on_enter::<Starting>(|e| {
+            e.insert(ContainerPhase::Starting);
+        })
+        .trans::<Starting, _>(has_done, Running)
+        .on_enter::<Running>(|e| {
+            e.insert(ContainerPhase::Running);
+        })
+        .trans::<OneOfState<(Pending, PullingImage, Starting, Running)>, _>(
+            shutdown_requested,
+            Stopping,
+        )
+        .on_enter::<Stopping>(|e| {
+            e.insert(ContainerPhase::Stopping);
+        })
+        .trans::<Stopping, _>(has_done, Stopped)
+        .on_enter::<Stopped>(|e| {
+            e.insert(ContainerPhase::Stopped);
+        })
+        .set_trans_logging(true)
+}
+
+pub fn build_orchestrator_sm() -> StateMachine {
+    StateMachine::default()
+        .trans::<Deploying, _>(all_containers_running, AllRunning)
+        .trans::<OneOfState<(Deploying, AllRunning)>, _>(shutdown_requested, ShuttingDown)
+        .trans::<ShuttingDown, _>(all_containers_stopped, AllStopped)
+        .set_trans_logging(true)
+}
+
+// ── OnInsert observers (side effects on state entry) ──
+
+fn on_pulling_image(
+    trigger: On<Insert, PullingImage>,
     mut commands: Commands,
-    mut logs: Query<&mut LogBuffer>,
     backends: Query<&Backend>,
 ) {
-    let entity = trigger.event().0;
+    let entity = trigger.event_target();
+    let Ok(backend) = backends.get(entity) else {
+        return;
+    };
+    let backend = backend.0.clone();
 
-    if let Ok(mut log_buf) = logs.get_mut(entity) {
-        log_buf.push("Starting container...");
-    }
+    commands.entity(entity).insert(DownloadProgress {
+        downloaded: 0,
+        total: 0,
+    });
 
-    let backend = backends.get(entity).unwrap().0.clone();
-
-    commands
-        .entity(entity)
-        .insert(ContainerPhase::Starting)
-        .spawn_task(move |cmd| async move {
-            let entity = cmd.entity();
-            let cmd_logs = cmd.clone();
-            let _ = backend
-                .boot_container(move |text| {
+    commands.entity(entity).spawn_task(move |cmd| async move {
+        let entity = cmd.entity();
+        let cmd_progress = cmd.clone();
+        let cmd_logs = cmd.clone();
+        let _ = backend
+            .pull_image(
+                move |p| {
+                    cmd_progress.push(move |world: &mut World| {
+                        if let Some(mut dp) = world.get_mut::<DownloadProgress>(entity) {
+                            dp.downloaded = p.downloaded;
+                            dp.total = p.total;
+                        }
+                    });
+                },
+                move |text| {
                     cmd_logs.push(move |world: &mut World| {
                         if let Some(mut log_buf) = world.get_mut::<LogBuffer>(entity) {
                             log_buf.push(text);
                         }
                     });
-                })
-                .await;
-            cmd.trigger(BootComplete(entity));
+                },
+            )
+            .await;
+        cmd.push(move |world: &mut World| {
+            if world.get_entity(entity).is_ok() {
+                world.entity_mut(entity).insert(Done::Success);
+            }
         });
+    });
 }
 
-/// Observer: BootComplete -> set phase to Running.
-fn handle_boot_complete(
-    trigger: On<BootComplete>,
+fn on_starting(
+    trigger: On<Insert, Starting>,
     mut commands: Commands,
+    backends: Query<&Backend>,
     mut logs: Query<&mut LogBuffer>,
 ) {
-    let entity = trigger.event().0;
-    commands.entity(entity).insert(ContainerPhase::Running);
+    let entity = trigger.event_target();
 
+    if let Ok(mut log_buf) = logs.get_mut(entity) {
+        log_buf.push("Starting container...");
+    }
+
+    let Ok(backend) = backends.get(entity) else {
+        return;
+    };
+    let backend = backend.0.clone();
+
+    commands.entity(entity).spawn_task(move |cmd| async move {
+        let entity = cmd.entity();
+        let cmd_logs = cmd.clone();
+        let _ = backend
+            .boot_container(move |text| {
+                cmd_logs.push(move |world: &mut World| {
+                    if let Some(mut log_buf) = world.get_mut::<LogBuffer>(entity) {
+                        log_buf.push(text);
+                    }
+                });
+            })
+            .await;
+        cmd.push(move |world: &mut World| {
+            if world.get_entity(entity).is_ok() {
+                world.entity_mut(entity).insert(Done::Success);
+            }
+        });
+    });
+}
+
+fn on_running(
+    _trigger: On<Insert, Running>,
+    mut logs: Query<&mut LogBuffer>,
+    wake: Res<CommandSender>,
+) {
+    let entity = _trigger.event_target();
     if let Ok(mut log_buf) = logs.get_mut(entity) {
         log_buf.push("Container started");
     }
+    wake.send(|_: &mut World| {});
 }
 
-/// Observer: ShutdownAll -> set active containers to Stopping, spawn shutdown tasks via backend.
-fn handle_shutdown_all(
-    _trigger: On<ShutdownAll>,
+fn on_stopping(
+    trigger: On<Insert, Stopping>,
     mut commands: Commands,
-    containers: Query<(Entity, &Backend, &ContainerPhase), Without<SystemEntity>>,
+    backends: Query<&Backend>,
+    mut logs: Query<&mut LogBuffer>,
+) {
+    let entity = trigger.event_target();
+
+    if let Ok(mut log_buf) = logs.get_mut(entity) {
+        log_buf.push("Stopping container...");
+    }
+
+    let Ok(backend) = backends.get(entity) else {
+        return;
+    };
+    let backend = backend.0.clone();
+
+    commands.entity(entity).spawn_task(move |cmd| async move {
+        let entity = cmd.entity();
+        let _ = backend.stop_container().await;
+        cmd.push(move |world: &mut World| {
+            if world.get_entity(entity).is_ok() {
+                world.entity_mut(entity).insert(Done::Success);
+            }
+        });
+    });
+}
+
+fn on_stopped(
+    _trigger: On<Insert, Stopped>,
+    mut logs: Query<&mut LogBuffer>,
+    wake: Res<CommandSender>,
+) {
+    let entity = _trigger.event_target();
+    if let Ok(mut log_buf) = logs.get_mut(entity) {
+        log_buf.push("Container stopped");
+    }
+    wake.send(|_: &mut World| {});
+}
+
+// ── Orchestrator observers ──
+
+fn on_all_running(
+    _trigger: On<Insert, AllRunning>,
     mut logs: Query<&mut LogBuffer>,
     system_entity: Query<Entity, With<SystemEntity>>,
+    wake: Res<CommandSender>,
 ) {
     if let Ok(sys) = system_entity.single()
         && let Ok(mut log_buf) = logs.get_mut(sys)
     {
-        log_buf.push("Shutting down...");
-    }
-
-    for (entity, backend, phase) in &containers {
-        match phase {
-            ContainerPhase::Running
-            | ContainerPhase::PullingImage
-            | ContainerPhase::Starting
-            | ContainerPhase::Pending => {
-                if let Ok(mut log_buf) = logs.get_mut(entity) {
-                    log_buf.push("Stopping container...");
-                }
-
-                let backend = backend.0.clone();
-
-                commands
-                    .entity(entity)
-                    .insert(ContainerPhase::Stopping)
-                    .spawn_task(move |cmd| async move {
-                        let _ = backend.stop_container().await;
-                        cmd.trigger(ShutdownComplete(cmd.entity()));
-                    });
-            }
-            _ => {}
-        }
-    }
-}
-
-/// Observer: ShutdownComplete -> set phase to Stopped.
-fn handle_shutdown_complete(
-    trigger: On<ShutdownComplete>,
-    mut commands: Commands,
-    mut logs: Query<&mut LogBuffer>,
-) {
-    let entity = trigger.event().0;
-    commands.entity(entity).insert(ContainerPhase::Stopped);
-
-    if let Ok(mut log_buf) = logs.get_mut(entity) {
-        log_buf.push("Container stopped");
-    }
-}
-
-/// System: if all containers are Running, log and exit.
-pub fn check_all_running(
-    all_phases: Query<&ContainerPhase, Without<SystemEntity>>,
-    mut logs: Query<&mut LogBuffer>,
-    system_entity: Query<Entity, With<SystemEntity>>,
-) {
-    if all_phases.iter().all(|p| *p == ContainerPhase::Running)
-        && let Ok(sys) = system_entity.single()
-        && let Ok(mut log_buf) = logs.get_mut(sys)
-    {
         log_buf.push("All containers ready.");
     }
+    wake.send(|_: &mut World| {});
 }
 
-/// System: if all containers are Stopped, log and exit.
-pub fn check_all_stopped(
-    all_phases: Query<&ContainerPhase, Without<SystemEntity>>,
+fn on_all_stopped(
+    _trigger: On<Insert, AllStopped>,
     mut logs: Query<&mut LogBuffer>,
     system_entity: Query<Entity, With<SystemEntity>>,
     mut exit: ResMut<AppExit>,
+    wake: Res<CommandSender>,
 ) {
-    if exit.0 || all_phases.is_empty() {
-        return;
+    if let Ok(sys) = system_entity.single()
+        && let Ok(mut log_buf) = logs.get_mut(sys)
+    {
+        log_buf.push("All containers stopped.");
     }
-    if all_phases.iter().all(|p| *p == ContainerPhase::Stopped) {
-        if let Ok(sys) = system_entity.single()
-            && let Ok(mut log_buf) = logs.get_mut(sys)
+    exit.0 = true;
+    wake.send(|_: &mut World| {});
+}
+
+// ── ShutdownAll handler ──
+
+fn handle_shutdown_all(
+    _trigger: On<ShutdownAll>,
+    cmd: Res<CommandSender>,
+) {
+    cmd.send(|world: &mut World| {
+        world.resource_mut::<ShutdownRequested>().0 = true;
+        if let Some(sys) = world
+            .query_filtered::<Entity, With<SystemEntity>>()
+            .iter(world)
+            .next()
+            && let Some(mut log_buf) = world.get_mut::<LogBuffer>(sys)
         {
-            log_buf.push("All containers stopped.");
+            log_buf.push("Shutting down...");
         }
-        exit.0 = true;
+    });
+}
+
+// ── Plugin ──
+
+pub struct LifecyclePlugin;
+
+impl Plugin for LifecyclePlugin {
+    fn build(&self, app: &mut App) {
+        app.add_plugins(StateMachinePlugin::default().schedule(PreUpdate));
+        app.init_resource::<MergedLogView>();
+        app.init_resource::<ShutdownRequested>();
+
+        // Container lifecycle observers
+        app.add_observer(on_pulling_image);
+        app.add_observer(on_starting);
+        app.add_observer(on_running);
+        app.add_observer(on_stopping);
+        app.add_observer(on_stopped);
+
+        // Orchestrator observers
+        app.add_observer(on_all_running);
+        app.add_observer(on_all_stopped);
+
+        // ShutdownAll handler
+        app.add_observer(handle_shutdown_all);
     }
 }

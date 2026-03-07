@@ -1782,6 +1782,7 @@ dependencies = [
  "rand",
  "roam",
  "roam-stream",
+ "seldom_state",
  "serde",
  "tokio",
  "tokio-util",
@@ -3757,6 +3758,21 @@ name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
+
+[[package]]
+name = "seldom_state"
+version = "0.15.0"
+source = "git+https://github.com/Wiwip/seldom_state.git?rev=cc6c89f#cc6c89f19bd6b3f14d6e86af7aa2e51daec073d8"
+dependencies = [
+ "bevy_app",
+ "bevy_derive",
+ "bevy_ecs",
+ "bevy_log",
+ "bevy_math",
+ "bevy_utils",
+ "either",
+ "variadics_please",
+]
 
 [[package]]
 name = "self_cell"
