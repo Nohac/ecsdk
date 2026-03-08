@@ -1,8 +1,8 @@
 use std::io;
 
 use interprocess::local_socket::{
-    tokio::{prelude::*, Listener, Stream},
     GenericFilePath, ListenerOptions,
+    tokio::{Listener, Stream, prelude::*},
 };
 
 pub const SOCKET_PATH: &str = "/tmp/ecs-compose-daemon.sock";
@@ -13,9 +13,7 @@ pub fn socket_name() -> interprocess::local_socket::Name<'static> {
 
 pub fn create_listener() -> io::Result<Listener> {
     let _ = std::fs::remove_file(SOCKET_PATH);
-    ListenerOptions::new()
-        .name(socket_name())
-        .create_tokio()
+    ListenerOptions::new().name(socket_name()).create_tokio()
 }
 
 pub async fn connect() -> io::Result<Stream> {

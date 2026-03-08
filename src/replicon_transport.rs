@@ -9,8 +9,8 @@ use tokio::sync::mpsc;
 use tokio_util::bytes::Bytes;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
-use crate::container::*;
 use crate::cmd::AppExit;
+use crate::container::*;
 use crate::task::SpawnTask;
 
 // ---------------------------------------------------------------------------

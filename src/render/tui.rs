@@ -152,11 +152,7 @@ fn render_header(
     state: &mut TuiRenderState,
     full: bool,
 ) {
-    let name_width = containers
-        .iter()
-        .map(|c| c.name.len())
-        .max()
-        .unwrap_or(10);
+    let name_width = containers.iter().map(|c| c.name.len()).max().unwrap_or(10);
 
     for (i, c) in containers.iter().enumerate() {
         if i as u16 >= rect.h {
@@ -164,9 +160,9 @@ fn render_header(
         }
 
         let phase_changed = state.last_phase.get(&c.entity) != Some(&c.phase);
-        let progress_changed = c.downloaded.is_some_and(|d| {
-            state.last_progress.get(&c.entity).copied().unwrap_or(0) != d
-        });
+        let progress_changed = c
+            .downloaded
+            .is_some_and(|d| state.last_progress.get(&c.entity).copied().unwrap_or(0) != d);
 
         if !full && !phase_changed && !progress_changed {
             continue;
@@ -219,7 +215,11 @@ fn render_log_line(
     let _ = out.queue(MoveTo(0, row));
     let _ = out.queue(Clear(ClearType::CurrentLine));
     let _ = out.queue(SetForegroundColor(svc_color));
-    let _ = out.queue(Print(format!("  {:<width$}", entry.name, width = name_width)));
+    let _ = out.queue(Print(format!(
+        "  {:<width$}",
+        entry.name,
+        width = name_width
+    )));
     let _ = out.queue(ResetColor);
     let _ = out.queue(Print(" | "));
 
@@ -306,13 +306,18 @@ pub(super) fn render_tui(
     // Collect and sort containers
     let mut containers: Vec<_> = query
         .iter()
-        .map(|(entity, name, order, phase, progress)| (order.0, ContainerRow {
-            entity,
-            name: name.0.clone(),
-            phase: *phase,
-            downloaded: progress.map(|p| p.downloaded),
-            total: progress.map(|p| p.total),
-        }))
+        .map(|(entity, name, order, phase, progress)| {
+            (
+                order.0,
+                ContainerRow {
+                    entity,
+                    name: name.0.clone(),
+                    phase: *phase,
+                    downloaded: progress.map(|p| p.downloaded),
+                    total: progress.map(|p| p.total),
+                },
+            )
+        })
         .collect();
     containers.sort_by_key(|(order, _)| *order);
     let containers: Vec<_> = containers.into_iter().map(|(_, c)| c).collect();
@@ -336,15 +341,16 @@ pub(super) fn render_tui(
         state.last_progress.clear();
     }
 
-    let name_width = containers
-        .iter()
-        .map(|c| c.name.len())
-        .max()
-        .unwrap_or(10);
+    let name_width = containers.iter().map(|c| c.name.len()).max().unwrap_or(10);
 
     render_header(
         &mut out,
-        Rect { col: 0, row: 0, w: cols, h: header_h },
+        Rect {
+            col: 0,
+            row: 0,
+            w: cols,
+            h: header_h,
+        },
         &containers,
         &mut state,
         full,
@@ -352,12 +358,22 @@ pub(super) fn render_tui(
 
     render_separator(
         &mut out,
-        Rect { col: 0, row: separator_row, w: cols, h: 1 },
+        Rect {
+            col: 0,
+            row: separator_row,
+            w: cols,
+            h: 1,
+        },
     );
 
     render_logs(
         &mut out,
-        Rect { col: 0, row: log_start, w: cols, h: log_h },
+        Rect {
+            col: 0,
+            row: log_start,
+            w: cols,
+            h: log_h,
+        },
         &merged_logs,
         &mut state,
         name_width,

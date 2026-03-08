@@ -4,8 +4,8 @@ use seldom_state::prelude::*;
 
 use crate::backend::ContainerBackend;
 use crate::backend::ContainerRuntime;
-use crate::container::*;
 use crate::cmd::ScheduleControl;
+use crate::container::*;
 use crate::message::{Message, MessageQueue};
 use crate::task::SpawnTask;
 

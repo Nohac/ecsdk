@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use crate::container::*;
-use crate::lifecycle::{build_container_sm, Pending, ShutdownRequested};
+use crate::lifecycle::{Pending, ShutdownRequested, build_container_sm};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum Message {

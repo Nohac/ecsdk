@@ -6,11 +6,11 @@ use bevy_replicon::prelude::*;
 use tokio::signal::ctrl_c;
 
 use crate::backend_mock::MockBackend;
+use crate::cmd::AppExit;
 use crate::container::*;
 use crate::lifecycle::*;
-use crate::cmd::AppExit;
-use crate::replicon_transport::*;
 use crate::message::{Message, MessageQueue};
+use crate::replicon_transport::*;
 use crate::task::SpawnTask;
 
 // ---------------------------------------------------------------------------
@@ -67,11 +67,7 @@ impl Plugin for DaemonPlugin {
         app.add_plugins(bevy::time::TimePlugin);
 
         // Replicon server
-        app.add_plugins(
-            RepliconPlugins
-                .build()
-                .set(ServerPlugin::new(PostUpdate)),
-        );
+        app.add_plugins(RepliconPlugins.build().set(ServerPlugin::new(PostUpdate)));
         app.add_plugins(SharedReplicationPlugin);
         app.add_plugins(ServerTransportPlugin);
 
@@ -116,10 +112,7 @@ pub async fn run_daemon() {
         });
     }
 
-    app.world_mut().spawn((
-        Deploying,
-        build_orchestrator_sm(),
-    ));
+    app.world_mut().spawn((Deploying, build_orchestrator_sm()));
 
     app.world_mut().spawn((
         ContainerName("[system]".into()),

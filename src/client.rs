@@ -4,8 +4,8 @@ use bevy::state::prelude::*;
 use bevy_replicon::prelude::*;
 use crossterm::event::{Event, KeyCode, KeyModifiers};
 
-use crate::container::*;
 use crate::cmd::AppExit;
+use crate::container::*;
 use crate::protocol::{LogEvent, ServerExitNotice, ShutdownRequest};
 use crate::render::{CrosstermPlugin, RenderMode, TerminalEvent};
 use crate::replicon_transport::*;
@@ -15,7 +15,9 @@ use crate::replicon_transport::*;
 // ---------------------------------------------------------------------------
 
 fn on_remote_added(trigger: On<Add, Remote>, mut commands: Commands) {
-    commands.entity(trigger.event_target()).insert(LogBuffer::default());
+    commands
+        .entity(trigger.event_target())
+        .insert(LogBuffer::default());
 }
 
 fn on_log_event(trigger: On<LogEvent>, mut logs: Query<&mut LogBuffer>) {
