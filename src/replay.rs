@@ -1,11 +1,11 @@
 use bevy::app::App;
 
 use crate::lifecycle::LifecycleTestPlugin;
-use crate::state_event::StateEvent;
+use crate::message::Message;
 
 /// Replays a sequence of state events, running `app.update()` after each one.
 /// Returns the final App for inspection.
-pub fn replay(events: &[StateEvent]) -> App {
+pub fn replay(events: &[Message]) -> App {
     let mut app = App::new();
     app.add_plugins(LifecycleTestPlugin);
     app.update();
@@ -26,19 +26,19 @@ mod tests {
     #[test]
     fn replay_full_lifecycle() {
         let events = vec![
-            StateEvent::SpawnContainer {
+            Message::SpawnContainer {
                 name: "postgres".into(),
                 image: "postgres:16".into(),
                 start_order: 0,
             },
-            StateEvent::MarkDone {
+            Message::MarkDone {
                 container_name: "postgres".into(),
             },
-            StateEvent::MarkDone {
+            Message::MarkDone {
                 container_name: "postgres".into(),
             },
-            StateEvent::RequestShutdown,
-            StateEvent::MarkDone {
+            Message::RequestShutdown,
+            Message::MarkDone {
                 container_name: "postgres".into(),
             },
         ];
@@ -58,12 +58,12 @@ mod tests {
     #[test]
     fn replay_roundtrip_via_json() {
         let events = vec![
-            StateEvent::SpawnContainer {
+            Message::SpawnContainer {
                 name: "redis".into(),
                 image: "redis:7".into(),
                 start_order: 0,
             },
-            StateEvent::MarkDone {
+            Message::MarkDone {
                 container_name: "redis".into(),
             },
         ];
@@ -75,7 +75,7 @@ mod tests {
             .collect();
 
         // Deserialize back
-        let deserialized: Vec<StateEvent> = json
+        let deserialized: Vec<Message> = json
             .iter()
             .map(|line| serde_json::from_str(line).unwrap())
             .collect();

@@ -11,5 +11,5 @@ pub mod protocol;
 pub mod render;
 pub mod replay;
 pub mod replicon_transport;
-pub mod state_event;
+pub mod message;
 pub mod task;

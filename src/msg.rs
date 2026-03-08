@@ -5,23 +5,30 @@ use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 use tokio::sync::Notify;
 
-use crate::state_event::{StateEvent, StateQueue};
+use crate::message::{Message, MessageQueue};
 
 /// Boxed closure that mutates the world directly from an async task.
 pub type WorldCallback = Box<dyn FnOnce(&mut World) + Send>;
 
-/// Resource that bridges async tasks to the ECS world.
-/// Carries a command channel sender, an optional Tokio runtime handle,
-/// and a wake signal for triggering immediate schedule updates.
+/// Signals the main loop to run `app.update()` at the next fps boundary.
 #[derive(Resource, Clone)]
-pub struct Queue {
+pub struct TickSignal(pub Arc<Notify>);
+
+/// Signals the main loop to run `app.update()` immediately.
+#[derive(Resource, Clone)]
+pub struct WakeSignal(pub Arc<Notify>);
+
+/// Resource that bridges async tasks to the ECS world.
+/// Carries a command channel sender and an optional Tokio runtime handle.
+#[derive(Resource, Clone)]
+pub struct CmdQueue {
     pub(crate) tx: mpsc::UnboundedSender<WorldCallback>,
     pub(crate) handle: Option<Handle>,
-    pub(crate) wake: Arc<Notify>,
+    pub(crate) wake: WakeSignal,
 }
 
-impl Queue {
-    pub fn new(tx: mpsc::UnboundedSender<WorldCallback>, handle: Handle, wake: Arc<Notify>) -> Self {
+impl CmdQueue {
+    pub fn new(tx: mpsc::UnboundedSender<WorldCallback>, handle: Handle, wake: WakeSignal) -> Self {
         Self {
             tx,
             handle: Some(handle),
@@ -36,7 +43,7 @@ impl Queue {
         Self {
             tx,
             handle: None,
-            wake: Arc::new(Notify::new()),
+            wake: WakeSignal(Arc::new(Notify::new())),
         }
     }
 
@@ -45,7 +52,7 @@ impl Queue {
     }
 
     pub fn wake(&self) {
-        self.wake.notify_one();
+        self.wake.0.notify_one();
     }
 }
 
@@ -54,12 +61,12 @@ impl Queue {
 #[derive(Clone)]
 pub struct TaskQueue {
     entity: Entity,
-    queue: Queue,
-    state_queue: StateQueue,
+    queue: CmdQueue,
+    state_queue: MessageQueue,
 }
 
 impl TaskQueue {
-    pub(crate) fn new(entity: Entity, queue: Queue, state_queue: StateQueue) -> Self {
+    pub(crate) fn new(entity: Entity, queue: CmdQueue, state_queue: MessageQueue) -> Self {
         Self {
             entity,
             queue,
@@ -75,7 +82,7 @@ impl TaskQueue {
         self.queue.send(f);
     }
 
-    pub fn send_state(&self, event: StateEvent) {
+    pub fn send_state(&self, event: Message) {
         self.state_queue.send(event);
     }
 
@@ -84,17 +91,9 @@ impl TaskQueue {
     }
 }
 
-// ── Scheduling resources ──
+// ── Scheduling ──
 
-/// Set by systems/observers to request a tick-rate-limited schedule update.
-#[derive(Resource, Default)]
-pub struct NeedsTick(pub bool);
-
-/// Set by systems/observers to request an immediate schedule update.
-#[derive(Resource, Default)]
-pub struct NeedsWake(pub bool);
-
-/// Extension trait for requesting schedule updates from within `app.update()`.
+/// Extension trait for requesting schedule updates.
 pub trait ScheduleControl {
     fn tick(&mut self);
     fn wake(&mut self);
@@ -102,10 +101,19 @@ pub trait ScheduleControl {
 
 impl ScheduleControl for Commands<'_, '_> {
     fn tick(&mut self) {
-        self.insert_resource(NeedsTick(true));
+        self.queue(|world: &mut World| world.tick());
     }
     fn wake(&mut self) {
-        self.insert_resource(NeedsWake(true));
+        self.queue(|world: &mut World| world.wake());
+    }
+}
+
+impl ScheduleControl for World {
+    fn tick(&mut self) {
+        self.resource::<TickSignal>().0.notify_one();
+    }
+    fn wake(&mut self) {
+        self.resource::<WakeSignal>().0.notify_one();
     }
 }
 

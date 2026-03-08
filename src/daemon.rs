@@ -10,7 +10,7 @@ use crate::container::*;
 use crate::lifecycle::*;
 use crate::msg::AppExit;
 use crate::replicon_transport::*;
-use crate::state_event::{StateEvent, StateQueue};
+use crate::message::{Message, MessageQueue};
 use crate::task::SpawnTask;
 
 // ---------------------------------------------------------------------------
@@ -88,7 +88,7 @@ impl Plugin for DaemonPlugin {
 fn spawn_ctrl_c_handler(mut commands: Commands) {
     commands.spawn_empty().spawn_task(move |cmd| async move {
         ctrl_c().await.ok();
-        cmd.send_state(StateEvent::RequestShutdown);
+        cmd.send_state(Message::RequestShutdown);
     });
 }
 
@@ -107,9 +107,9 @@ pub async fn run_daemon() {
     let (mut app, rx) = crate::app::setup();
     app.add_plugins(DaemonPlugin);
 
-    let state_queue = app.world().resource::<StateQueue>().clone();
+    let state_queue = app.world().resource::<MessageQueue>().clone();
     for (name, image, order) in containers {
-        state_queue.send(StateEvent::SpawnContainer {
+        state_queue.send(Message::SpawnContainer {
             name: name.into(),
             image: image.into(),
             start_order: order,

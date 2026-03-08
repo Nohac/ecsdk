@@ -6,7 +6,7 @@ use crate::backend::ContainerBackend;
 use crate::backend::ContainerRuntime;
 use crate::container::*;
 use crate::msg::ScheduleControl;
-use crate::state_event::{StateEvent, StateQueue};
+use crate::message::{Message, MessageQueue};
 use crate::task::SpawnTask;
 
 // ── State components (container lifecycle) ──
@@ -168,7 +168,7 @@ fn on_pulling_image(
                             dp.downloaded = downloaded;
                             dp.total = total;
                         }
-                        world.commands().tick();
+                        world.tick();
                     });
                 },
                 move |text| {
@@ -176,12 +176,12 @@ fn on_pulling_image(
                         if let Some(mut log_buf) = world.get_mut::<LogBuffer>(entity) {
                             log_buf.push(text);
                         }
-                        world.commands().tick();
+                        world.tick();
                     });
                 },
             )
             .await;
-        cmd.send_state(StateEvent::MarkDone { container_name });
+        cmd.send_state(Message::MarkDone { container_name });
     });
 }
 
@@ -213,11 +213,11 @@ fn on_starting(
                     if let Some(mut log_buf) = world.get_mut::<LogBuffer>(entity) {
                         log_buf.push(text);
                     }
-                    world.commands().tick();
+                    world.tick();
                 });
             })
             .await;
-        cmd.send_state(StateEvent::MarkDone { container_name });
+        cmd.send_state(Message::MarkDone { container_name });
     });
 }
 
@@ -249,7 +249,7 @@ fn on_stopping(
 
     commands.entity(entity).spawn_task(move |cmd| async move {
         let _ = backend.stop_container().await;
-        cmd.send_state(StateEvent::MarkDone { container_name });
+        cmd.send_state(Message::MarkDone { container_name });
     });
 }
 
@@ -290,14 +290,14 @@ fn on_all_stopped(
 
 // ── ShutdownAll handler ──
 
-fn handle_shutdown_all(_trigger: On<ShutdownAll>, state_queue: Res<StateQueue>) {
-    state_queue.send(StateEvent::RequestShutdown);
+fn handle_shutdown_all(_trigger: On<ShutdownAll>, state_queue: Res<MessageQueue>) {
+    state_queue.send(Message::RequestShutdown);
 }
 
 // ── Test-only plugin (state machines without side-effect observers) ──
 
 /// Registers state machine infrastructure and resources without observers.
-/// Use for pure state machine tests that don't need async tasks or Queue.
+/// Use for pure state machine tests that don't need async tasks or CmdQueue.
 pub struct LifecycleTestPlugin;
 
 impl Plugin for LifecycleTestPlugin {

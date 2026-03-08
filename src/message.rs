@@ -6,7 +6,7 @@ use crate::container::*;
 use crate::lifecycle::{build_container_sm, Pending, ShutdownRequested};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub enum StateEvent {
+pub enum Message {
     SpawnContainer {
         name: String,
         image: String,
@@ -18,7 +18,7 @@ pub enum StateEvent {
     RequestShutdown,
 }
 
-impl StateEvent {
+impl Message {
     pub fn apply(&self, world: &mut World) {
         match self {
             Self::SpawnContainer {
@@ -64,17 +64,17 @@ impl StateEvent {
 }
 
 #[derive(Resource, Clone)]
-pub struct StateQueue {
-    tx: mpsc::UnboundedSender<StateEvent>,
+pub struct MessageQueue {
+    tx: mpsc::UnboundedSender<Message>,
 }
 
-impl StateQueue {
-    pub fn new(tx: mpsc::UnboundedSender<StateEvent>) -> Self {
+impl MessageQueue {
+    pub fn new(tx: mpsc::UnboundedSender<Message>) -> Self {
         Self { tx }
     }
 
-    pub fn send(&self, event: StateEvent) {
-        let _ = self.tx.send(event);
+    pub fn send(&self, msg: Message) {
+        let _ = self.tx.send(msg);
     }
 
     pub fn test() -> Self {

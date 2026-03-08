@@ -4,8 +4,8 @@ use bevy::ecs::prelude::*;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use crate::msg::{Queue, TaskQueue};
-use crate::state_event::StateQueue;
+use crate::msg::{CmdQueue, TaskQueue};
+use crate::message::MessageQueue;
 
 /// Component tracking an in-flight async task. Cancels the task on drop.
 #[derive(Component)]
@@ -56,11 +56,11 @@ where
         let entity = ewm.id();
         let world = ewm.into_world_mut();
 
-        let queue = world.resource::<Queue>().clone();
+        let queue = world.resource::<CmdQueue>().clone();
         let Some(rt_handle) = queue.handle.clone() else {
             return;
         };
-        let state_queue = world.resource::<StateQueue>().clone();
+        let state_queue = world.resource::<MessageQueue>().clone();
         let token = CancellationToken::new();
         let task_queue = TaskQueue::new(entity, queue, state_queue);
         let fut = (self.0)(task_queue);
@@ -70,8 +70,8 @@ where
         let entity_for_abort = entity;
 
         let handle = {
-            let queue_complete = world.resource::<Queue>().clone();
-            let queue_abort = world.resource::<Queue>().clone();
+            let queue_complete = world.resource::<CmdQueue>().clone();
+            let queue_abort = world.resource::<CmdQueue>().clone();
             rt_handle.spawn(async move {
                 tokio::select! {
                     _ = fut => {

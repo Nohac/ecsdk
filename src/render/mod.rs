@@ -81,7 +81,7 @@ fn setup_crossterm(mut commands: Commands) {
                         let mut size = world.resource_mut::<TerminalSize>();
                         size.cols = cols;
                         size.rows = rows;
-                        world.commands().tick();
+                        world.tick();
                     });
                 }
                 let event_clone = event.clone();
