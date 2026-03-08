@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::time::Instant;
 
 use bevy::ecs::prelude::*;
@@ -75,38 +76,46 @@ pub struct MergedLogEntry {
     pub line: LogLine,
 }
 
+const MERGED_LOG_CAP: usize = 500;
+
 /// All log lines from all entities, merged and sorted by timestamp.
+/// Append-only rolling buffer — new lines are appended incrementally,
+/// old lines trimmed when the buffer exceeds `MERGED_LOG_CAP`.
 #[derive(Resource, Default)]
 pub struct MergedLogView {
     pub entries: Vec<MergedLogEntry>,
 }
 
-/// System that rebuilds the merged log view each frame.
+/// Incrementally appends new log lines from all entities into the merged view.
 pub fn build_merged_log_view(
     containers: Query<(Entity, &ContainerName, &LogBuffer), Without<SystemEntity>>,
     system_query: Query<(Entity, &ContainerName, &LogBuffer), With<SystemEntity>>,
     mut view: ResMut<MergedLogView>,
+    mut cursor: Local<HashMap<Entity, usize>>,
 ) {
-    view.entries.clear();
+    let mut new_entries = Vec::new();
 
-    for (entity, name, log_buf) in &containers {
-        for line in &log_buf.lines {
-            view.entries.push(MergedLogEntry {
+    for (entity, name, log_buf) in containers.iter().chain(system_query.iter()) {
+        let seen = cursor.entry(entity).or_insert(0);
+        for line in &log_buf.lines[*seen..] {
+            new_entries.push(MergedLogEntry {
                 entity,
                 name: name.0.clone(),
                 line: line.clone(),
             });
         }
-    }
-    for (entity, name, log_buf) in &system_query {
-        for line in &log_buf.lines {
-            view.entries.push(MergedLogEntry {
-                entity,
-                name: name.0.clone(),
-                line: line.clone(),
-            });
-        }
+        *seen = log_buf.lines.len();
     }
 
-    view.entries.sort_by_key(|e| e.line.timestamp);
+    if new_entries.is_empty() {
+        return;
+    }
+
+    new_entries.sort_by_key(|e| e.line.timestamp);
+    view.entries.extend(new_entries);
+
+    if view.entries.len() > MERGED_LOG_CAP {
+        let excess = view.entries.len() - MERGED_LOG_CAP;
+        view.entries.drain(..excess);
+    }
 }
