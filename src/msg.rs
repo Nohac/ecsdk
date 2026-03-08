@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use bevy::ecs::prelude::*;
 use tokio::runtime::Handle;
-use tokio::sync::mpsc;
 use tokio::sync::Notify;
+use tokio::sync::mpsc;
 
 use crate::message::{Message, MessageQueue};
 
@@ -47,8 +47,9 @@ impl CmdQueue {
         }
     }
 
-    pub fn send(&self, f: impl FnOnce(&mut World) + Send + 'static) {
+    pub fn send(&self, f: impl FnOnce(&mut World) + Send + 'static) -> &Self {
         let _ = self.tx.send(Box::new(f));
+        self
     }
 
     pub fn wake(&self) {
@@ -78,8 +79,9 @@ impl TaskQueue {
         self.entity
     }
 
-    pub fn send(&self, f: impl FnOnce(&mut World) + Send + 'static) {
+    pub fn send(&self, f: impl FnOnce(&mut World) + Send + 'static) -> &Self {
         self.queue.send(f);
+        self
     }
 
     pub fn send_state(&self, event: Message) {

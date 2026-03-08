@@ -159,10 +159,11 @@ impl Command for AcceptClientCmd {
             .await;
 
             let entity = client_cmd.entity();
-            client_cmd.send(move |world: &mut World| {
-                UnregisterClientCmd { entity }.apply(world);
-            });
-            client_cmd.wake();
+            client_cmd
+                .send(move |world: &mut World| {
+                    UnregisterClientCmd { entity }.apply(world);
+                })
+                .wake();
         });
 
         world.flush();
@@ -183,7 +184,10 @@ pub struct UnregisterClientCmd {
 
 impl Command for UnregisterClientCmd {
     fn apply(self, world: &mut World) {
-        world.resource_mut::<ServerBridge>().clients.remove(&self.entity);
+        world
+            .resource_mut::<ServerBridge>()
+            .clients
+            .remove(&self.entity);
         if world.get_entity(self.entity).is_ok() {
             world.despawn(self.entity);
         }
@@ -228,8 +232,8 @@ fn spawn_server_listener(mut commands: Commands) {
 
             cmd.send(move |world: &mut World| {
                 AcceptClientCmd { stream }.apply(world);
-            });
-            cmd.wake();
+            })
+            .wake();
         }
     });
 }
@@ -301,8 +305,8 @@ fn spawn_client_connection(mut commands: Commands) {
                 eprintln!("Failed to connect to daemon: {e}");
                 cmd.send(|world: &mut World| {
                     world.resource_mut::<AppExit>().0 = true;
-                });
-                cmd.wake();
+                })
+                .wake();
                 return;
             }
         };
@@ -316,8 +320,8 @@ fn spawn_client_connection(mut commands: Commands) {
                 to_server_tx,
             }
             .apply(world);
-        });
-        cmd.wake();
+        })
+        .wake();
 
         let wake = cmd.clone();
         run_bridge(stream, &mut to_server_rx, &from_server_tx, move || {
@@ -327,11 +331,9 @@ fn spawn_client_connection(mut commands: Commands) {
 
         cmd.send(|world: &mut World| {
             RemoveClientBridgeCmd.apply(world);
-        });
-        cmd.send(|world: &mut World| {
             world.resource_mut::<AppExit>().0 = true;
-        });
-        cmd.wake();
+        })
+        .wake();
     });
 }
 

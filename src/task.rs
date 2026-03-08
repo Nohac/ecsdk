@@ -75,16 +75,18 @@ where
             rt_handle.spawn(async move {
                 tokio::select! {
                     _ = fut => {
-                        queue_complete.send(move |world: &mut World| {
-                            world.trigger(TaskComplete(entity_for_complete));
-                        });
-                        queue_complete.wake();
+                        queue_complete
+                            .send(move |world: &mut World| {
+                                world.trigger(TaskComplete(entity_for_complete));
+                            })
+                            .wake();
                     }
                     _ = child_token.cancelled() => {
-                        queue_abort.send(move |world: &mut World| {
-                            world.trigger(TaskAborted(entity_for_abort));
-                        });
-                        queue_abort.wake();
+                        queue_abort
+                            .send(move |world: &mut World| {
+                                world.trigger(TaskAborted(entity_for_abort));
+                            })
+                            .wake();
                     }
                 }
             })

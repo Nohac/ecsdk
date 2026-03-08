@@ -87,8 +87,8 @@ fn setup_crossterm(mut commands: Commands) {
                 let event_clone = event.clone();
                 cmd.send(move |world: &mut World| {
                     world.trigger(TerminalEvent(event_clone));
-                });
-                cmd.wake();
+                })
+                .wake();
             }
         });
 }
