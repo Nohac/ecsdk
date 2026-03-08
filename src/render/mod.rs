@@ -10,7 +10,7 @@ use crossterm::event::{Event, EventStream};
 use futures_util::StreamExt;
 
 use crate::container::build_merged_log_view;
-use crate::msg::ScheduleControl;
+use crate::cmd::ScheduleControl;
 use crate::task::SpawnTask;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, ValueEnum)]

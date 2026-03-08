@@ -7,7 +7,7 @@ use tokio::runtime::Handle;
 use tokio::sync::{Notify, mpsc};
 use tokio::time::interval;
 
-use crate::msg::{AppExit, CmdQueue, TickSignal, WakeSignal, WorldCallback};
+use crate::cmd::{AppExit, CmdQueue, TickSignal, WakeSignal, WorldCallback};
 use crate::message::{Message, MessageQueue};
 
 pub struct Receivers {

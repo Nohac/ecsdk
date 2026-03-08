@@ -5,7 +5,7 @@ use seldom_state::prelude::*;
 use crate::backend::ContainerBackend;
 use crate::backend::ContainerRuntime;
 use crate::container::*;
-use crate::msg::ScheduleControl;
+use crate::cmd::ScheduleControl;
 use crate::message::{Message, MessageQueue};
 use crate::task::SpawnTask;
 
@@ -221,8 +221,8 @@ fn on_starting(
     });
 }
 
-fn on_running(_trigger: On<Insert, Running>, mut logs: Query<&mut LogBuffer>) {
-    let entity = _trigger.event_target();
+fn on_running(trigger: On<Insert, Running>, mut logs: Query<&mut LogBuffer>) {
+    let entity = trigger.event_target();
     if let Ok(mut log_buf) = logs.get_mut(entity) {
         log_buf.push("Container started");
     }
@@ -253,8 +253,8 @@ fn on_stopping(
     });
 }
 
-fn on_stopped(_trigger: On<Insert, Stopped>, mut logs: Query<&mut LogBuffer>) {
-    let entity = _trigger.event_target();
+fn on_stopped(trigger: On<Insert, Stopped>, mut logs: Query<&mut LogBuffer>) {
+    let entity = trigger.event_target();
     if let Ok(mut log_buf) = logs.get_mut(entity) {
         log_buf.push("Container stopped");
     }
@@ -278,7 +278,7 @@ fn on_all_stopped(
     _trigger: On<Insert, AllStopped>,
     mut logs: Query<&mut LogBuffer>,
     system_entity: Query<Entity, With<SystemEntity>>,
-    mut exit: ResMut<crate::msg::AppExit>,
+    mut exit: ResMut<crate::cmd::AppExit>,
 ) {
     if let Ok(sys) = system_entity.single()
         && let Ok(mut log_buf) = logs.get_mut(sys)

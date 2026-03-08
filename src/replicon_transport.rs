@@ -10,7 +10,7 @@ use tokio_util::bytes::Bytes;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
 use crate::container::*;
-use crate::msg::AppExit;
+use crate::cmd::AppExit;
 use crate::task::SpawnTask;
 
 // ---------------------------------------------------------------------------

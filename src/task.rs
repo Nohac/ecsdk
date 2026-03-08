@@ -4,7 +4,7 @@ use bevy::ecs::prelude::*;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use crate::msg::{CmdQueue, TaskQueue};
+use crate::cmd::{CmdQueue, TaskQueue};
 use crate::message::MessageQueue;
 
 /// Component tracking an in-flight async task. Cancels the task on drop.

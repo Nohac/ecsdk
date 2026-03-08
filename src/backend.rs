@@ -21,5 +21,4 @@ pub trait ContainerBackend {
     async fn stop_container(&self) -> Result<(), String>;
 }
 
-/// Only MockBackend remains — MirrorBackend is replaced by replicon replication.
 pub type ContainerRuntime = MockBackend;

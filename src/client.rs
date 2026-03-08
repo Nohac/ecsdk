@@ -5,7 +5,7 @@ use bevy_replicon::prelude::*;
 use crossterm::event::{Event, KeyCode, KeyModifiers};
 
 use crate::container::*;
-use crate::msg::AppExit;
+use crate::cmd::AppExit;
 use crate::protocol::{LogEvent, ServerExitNotice, ShutdownRequest};
 use crate::render::{CrosstermPlugin, RenderMode, TerminalEvent};
 use crate::replicon_transport::*;

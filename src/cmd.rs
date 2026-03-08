@@ -12,11 +12,11 @@ pub type WorldCallback = Box<dyn FnOnce(&mut World) + Send>;
 
 /// Signals the main loop to run `app.update()` at the next fps boundary.
 #[derive(Resource, Clone)]
-pub struct TickSignal(pub Arc<Notify>);
+pub struct TickSignal(pub(crate) Arc<Notify>);
 
 /// Signals the main loop to run `app.update()` immediately.
 #[derive(Resource, Clone)]
-pub struct WakeSignal(pub Arc<Notify>);
+pub struct WakeSignal(pub(crate) Arc<Notify>);
 
 /// Resource that bridges async tasks to the ECS world.
 /// Carries a command channel sender and an optional Tokio runtime handle.

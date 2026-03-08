@@ -8,7 +8,7 @@ use tokio::signal::ctrl_c;
 use crate::backend_mock::MockBackend;
 use crate::container::*;
 use crate::lifecycle::*;
-use crate::msg::AppExit;
+use crate::cmd::AppExit;
 use crate::replicon_transport::*;
 use crate::message::{Message, MessageQueue};
 use crate::task::SpawnTask;

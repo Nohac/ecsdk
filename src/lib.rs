@@ -6,7 +6,7 @@ pub mod container;
 pub mod daemon;
 pub mod ipc;
 pub mod lifecycle;
-pub mod msg;
+pub mod cmd;
 pub mod protocol;
 pub mod render;
 pub mod replay;
