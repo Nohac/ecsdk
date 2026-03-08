@@ -8,9 +8,9 @@ use tokio::signal::ctrl_c;
 use crate::backend_mock::MockBackend;
 use crate::container::*;
 use crate::lifecycle::*;
-use crate::msg::{AppExit, TriggerEvent};
-use crate::protocol::{LogEvent, ServerExitNotice, ShutdownRequest};
+use crate::msg::AppExit;
 use crate::replicon_transport::*;
+use crate::state_event::{StateEvent, StateQueue};
 use crate::task::SpawnTask;
 
 // ---------------------------------------------------------------------------
@@ -27,7 +27,7 @@ fn send_log_events(
         for line in &log_buf.lines[sent..] {
             commands.server_trigger(ToClients {
                 mode: SendMode::Broadcast,
-                message: LogEvent {
+                message: crate::protocol::LogEvent {
                     container_entity: entity,
                     text: line.text.clone(),
                 },
@@ -41,14 +41,14 @@ fn send_exit_notice(mut commands: Commands, exit: Res<AppExit>, mut sent: Local<
     if exit.0 && !*sent {
         commands.server_trigger(ToClients {
             mode: SendMode::Broadcast,
-            message: ServerExitNotice,
+            message: crate::protocol::ServerExitNotice,
         });
         *sent = true;
     }
 }
 
 fn handle_shutdown_request(
-    _trigger: On<FromClient<ShutdownRequest>>,
+    _trigger: On<FromClient<crate::protocol::ShutdownRequest>>,
     mut commands: Commands,
 ) {
     commands.trigger(ShutdownAll);
@@ -88,7 +88,7 @@ impl Plugin for DaemonPlugin {
 fn spawn_ctrl_c_handler(mut commands: Commands) {
     commands.spawn_empty().spawn_task(move |cmd| async move {
         ctrl_c().await.ok();
-        cmd.send(TriggerEvent(ShutdownAll));
+        cmd.send_state(StateEvent::RequestShutdown);
     });
 }
 
@@ -104,21 +104,16 @@ pub async fn run_daemon() {
         ("web-frontend", "myapp/web:latest", 2),
     ];
 
-    let (mut app, msg_rx) = crate::app::setup();
+    let (mut app, rx) = crate::app::setup();
     app.add_plugins(DaemonPlugin);
 
+    let state_queue = app.world().resource::<StateQueue>().clone();
     for (name, image, order) in containers {
-        app.world_mut().spawn((
-            ContainerName(name.into()),
-            ImageRef(image.into()),
-            StartOrder(order),
-            ContainerPhase::Pending,
-            Pending,
-            build_container_sm(),
-            LogBuffer::default(),
-            Backend(MockBackend::new(name, image)),
-            Replicated,
-        ));
+        state_queue.send(StateEvent::SpawnContainer {
+            name: name.into(),
+            image: image.into(),
+            start_order: order,
+        });
     }
 
     app.world_mut().spawn((
@@ -133,8 +128,25 @@ pub async fn run_daemon() {
         Replicated,
     ));
 
-    crate::app::run_async(app, msg_rx).await;
+    // Backend factory — attach backends to containers spawned by state events
+    app.add_observer(attach_mock_backend);
+
+    crate::app::run_async(app, rx).await;
 
     let _ = std::fs::remove_file(crate::ipc::SOCKET_PATH);
     eprintln!("Daemon shut down");
+}
+
+fn attach_mock_backend(
+    trigger: On<Add, ContainerName>,
+    mut commands: Commands,
+    query: Query<(&ContainerName, &ImageRef), Without<Backend>>,
+) {
+    let entity = trigger.event_target();
+    let Ok((name, image)) = query.get(entity) else {
+        return;
+    };
+    commands
+        .entity(entity)
+        .insert((Backend(MockBackend::new(&name.0, &image.0)), Replicated));
 }

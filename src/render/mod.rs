@@ -10,13 +10,14 @@ use crossterm::event::{Event, EventStream};
 use futures_util::StreamExt;
 
 use crate::container::build_merged_log_view;
-use crate::msg::{Msg, TriggerEvent};
+use crate::msg::ScheduleControl;
 use crate::task::SpawnTask;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, ValueEnum)]
 pub enum RenderMode {
     Plain,
     Tui,
+    None,
 }
 
 /// Current terminal dimensions, kept up-to-date via resize events.
@@ -41,33 +42,6 @@ pub struct TerminalEvent(pub Event);
 #[derive(Component)]
 struct CrosstermEntity;
 
-// ── Render messages ──
-
-pub enum RenderMsg {
-    Resize(ResizeCmd),
-}
-
-impl Msg for RenderMsg {
-    fn apply(self: Box<Self>, commands: &mut Commands) {
-        match *self {
-            Self::Resize(cmd) => commands.queue(cmd),
-        }
-    }
-}
-
-pub struct ResizeCmd {
-    pub cols: u16,
-    pub rows: u16,
-}
-
-impl Command for ResizeCmd {
-    fn apply(self, world: &mut World) {
-        let mut size = world.resource_mut::<TerminalSize>();
-        size.cols = self.cols;
-        size.rows = self.rows;
-    }
-}
-
 pub struct CrosstermPlugin {
     mode: RenderMode,
 }
@@ -91,6 +65,7 @@ impl Plugin for CrosstermPlugin {
             RenderMode::Plain => {
                 app.add_systems(PostUpdate, plain::render_plain);
             }
+            RenderMode::None => {}
         }
     }
 }
@@ -102,9 +77,18 @@ fn setup_crossterm(mut commands: Commands) {
             let mut events = EventStream::new();
             while let Some(Ok(event)) = events.next().await {
                 if let Event::Resize(cols, rows) = event {
-                    cmd.send(RenderMsg::Resize(ResizeCmd { cols, rows }));
+                    cmd.send(move |world: &mut World| {
+                        let mut size = world.resource_mut::<TerminalSize>();
+                        size.cols = cols;
+                        size.rows = rows;
+                        world.commands().tick();
+                    });
                 }
-                cmd.send(TriggerEvent(TerminalEvent(event)));
+                let event_clone = event.clone();
+                cmd.send(move |world: &mut World| {
+                    world.trigger(TerminalEvent(event_clone));
+                });
+                cmd.wake();
             }
         });
 }

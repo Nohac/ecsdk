@@ -1,113 +1,112 @@
+use std::sync::Arc;
+
 use bevy::ecs::prelude::*;
 use tokio::runtime::Handle;
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc;
+use tokio::sync::Notify;
 
-use crate::container::LogBuffer;
+use crate::state_event::{StateEvent, StateQueue};
 
-/// A named message that can be applied to the world via Commands.
-pub trait Msg: Send + 'static {
-    fn apply(self: Box<Self>, commands: &mut Commands);
-}
+/// Boxed closure that mutates the world directly from an async task.
+pub type WorldCallback = Box<dyn FnOnce(&mut World) + Send>;
 
 /// Resource that bridges async tasks to the ECS world.
-/// Carries the message channel sender and an optional Tokio runtime handle.
+/// Carries a command channel sender, an optional Tokio runtime handle,
+/// and a wake signal for triggering immediate schedule updates.
 #[derive(Resource, Clone)]
 pub struct Queue {
-    pub(crate) msg_tx: UnboundedSender<Box<dyn Msg>>,
+    pub(crate) tx: mpsc::UnboundedSender<WorldCallback>,
     pub(crate) handle: Option<Handle>,
+    pub(crate) wake: Arc<Notify>,
 }
 
 impl Queue {
-    pub fn new(msg_tx: UnboundedSender<Box<dyn Msg>>, handle: Handle) -> Self {
-        Self { msg_tx, handle: Some(handle) }
+    pub fn new(tx: mpsc::UnboundedSender<WorldCallback>, handle: Handle, wake: Arc<Notify>) -> Self {
+        Self {
+            tx,
+            handle: Some(handle),
+            wake,
+        }
     }
 
-    /// Creates a no-op queue for testing. Messages are silently dropped
+    /// Creates a no-op queue for testing. Commands are silently dropped
     /// and async task spawning is disabled (no Tokio runtime needed).
     pub fn test() -> Self {
-        let (msg_tx, _) = tokio::sync::mpsc::unbounded_channel();
-        Self { msg_tx, handle: None }
+        let (tx, _) = mpsc::unbounded_channel();
+        Self {
+            tx,
+            handle: None,
+            wake: Arc::new(Notify::new()),
+        }
     }
 
-    pub fn send(&self, msg: impl Msg) {
-        let _ = self.msg_tx.send(Box::new(msg));
+    pub fn send(&self, f: impl FnOnce(&mut World) + Send + 'static) {
+        let _ = self.tx.send(Box::new(f));
+    }
+
+    pub fn wake(&self) {
+        self.wake.notify_one();
     }
 }
 
-/// Handle passed to async task closures. Provides access to the owning entity
-/// and a way to send messages back to the ECS.
+/// Handle passed to async task closures. Provides access to the owning entity,
+/// a way to send world-mutating commands, and state events back to the ECS.
 #[derive(Clone)]
 pub struct TaskQueue {
     entity: Entity,
     queue: Queue,
+    state_queue: StateQueue,
 }
 
 impl TaskQueue {
-    pub(crate) fn new(entity: Entity, queue: Queue) -> Self {
-        Self { entity, queue }
+    pub(crate) fn new(entity: Entity, queue: Queue, state_queue: StateQueue) -> Self {
+        Self {
+            entity,
+            queue,
+            state_queue,
+        }
     }
 
     pub fn entity(&self) -> Entity {
         self.entity
     }
 
-    pub fn send(&self, msg: impl Msg) {
-        self.queue.send(msg);
+    pub fn send(&self, f: impl FnOnce(&mut World) + Send + 'static) {
+        self.queue.send(f);
+    }
+
+    pub fn send_state(&self, event: StateEvent) {
+        self.state_queue.send(event);
+    }
+
+    pub fn wake(&self) {
+        self.queue.wake();
     }
 }
 
-// ── Built-in messages ──
+// ── Scheduling resources ──
 
-/// Triggers a Bevy event through the message queue.
-pub struct TriggerEvent<E>(pub E);
+/// Set by systems/observers to request a tick-rate-limited schedule update.
+#[derive(Resource, Default)]
+pub struct NeedsTick(pub bool);
 
-impl<E> Msg for TriggerEvent<E>
-where
-    E: Event + Send + 'static,
-    for<'a> E::Trigger<'a>: Default,
-{
-    fn apply(self: Box<Self>, commands: &mut Commands) {
-        commands.trigger(self.0);
+/// Set by systems/observers to request an immediate schedule update.
+#[derive(Resource, Default)]
+pub struct NeedsWake(pub bool);
+
+/// Extension trait for requesting schedule updates from within `app.update()`.
+pub trait ScheduleControl {
+    fn tick(&mut self);
+    fn wake(&mut self);
+}
+
+impl ScheduleControl for Commands<'_, '_> {
+    fn tick(&mut self) {
+        self.insert_resource(NeedsTick(true));
     }
-}
-
-/// Sets the AppExit resource to signal the main loop to exit.
-pub struct SetAppExit;
-
-impl Msg for SetAppExit {
-    fn apply(self: Box<Self>, commands: &mut Commands) {
-        commands.insert_resource(AppExit(true));
+    fn wake(&mut self) {
+        self.insert_resource(NeedsWake(true));
     }
-}
-
-/// Appends a log line to an entity's LogBuffer.
-pub struct AppendLog {
-    pub entity: Entity,
-    pub text: String,
-}
-
-impl Msg for AppendLog {
-    fn apply(self: Box<Self>, commands: &mut Commands) {
-        commands.entity(self.entity).queue(AppendLogCmd(self.text));
-    }
-}
-
-struct AppendLogCmd(String);
-
-impl EntityCommand for AppendLogCmd {
-    fn apply(self, mut ewm: EntityWorldMut<'_>) {
-        if let Some(mut log_buf) = ewm.get_mut::<LogBuffer>() {
-            log_buf.push(self.0);
-        }
-    }
-}
-
-/// Signals that replicon packets arrived on the transport channels
-/// and are ready to be drained by ECS systems in the next update cycle.
-pub struct PacketsReady;
-
-impl Msg for PacketsReady {
-    fn apply(self: Box<Self>, _commands: &mut Commands) {}
 }
 
 /// Checked by main loop after each cycle to know when to exit.

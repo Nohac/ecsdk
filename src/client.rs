@@ -87,7 +87,7 @@ impl Plugin for ClientPlugin {
 // ---------------------------------------------------------------------------
 
 pub async fn run_client(mode: RenderMode) {
-    let (mut app, msg_rx) = crate::app::setup();
+    let (mut app, rx) = crate::app::setup();
     app.add_plugins(ClientPlugin(mode));
-    crate::app::run_async(app, msg_rx).await;
+    crate::app::run_async(app, rx).await;
 }

@@ -4,7 +4,8 @@ use bevy::ecs::prelude::*;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use crate::msg::{Queue, TaskQueue, TriggerEvent};
+use crate::msg::{Queue, TaskQueue};
+use crate::state_event::StateQueue;
 
 /// Component tracking an in-flight async task. Cancels the task on drop.
 #[derive(Component)]
@@ -59,19 +60,31 @@ where
         let Some(rt_handle) = queue.handle.clone() else {
             return;
         };
+        let state_queue = world.resource::<StateQueue>().clone();
         let token = CancellationToken::new();
-        let task_queue = TaskQueue::new(entity, queue.clone());
+        let task_queue = TaskQueue::new(entity, queue, state_queue);
         let fut = (self.0)(task_queue);
         let child_token = token.child_token();
 
+        let entity_for_complete = entity;
+        let entity_for_abort = entity;
+
         let handle = {
+            let queue_complete = world.resource::<Queue>().clone();
+            let queue_abort = world.resource::<Queue>().clone();
             rt_handle.spawn(async move {
                 tokio::select! {
                     _ = fut => {
-                        queue.send(TriggerEvent(TaskComplete(entity)));
+                        queue_complete.send(move |world: &mut World| {
+                            world.trigger(TaskComplete(entity_for_complete));
+                        });
+                        queue_complete.wake();
                     }
                     _ = child_token.cancelled() => {
-                        queue.send(TriggerEvent(TaskAborted(entity)));
+                        queue_abort.send(move |world: &mut World| {
+                            world.trigger(TaskAborted(entity_for_abort));
+                        });
+                        queue_abort.wake();
                     }
                 }
             })

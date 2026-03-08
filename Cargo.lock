@@ -1735,6 +1735,7 @@ dependencies = [
  "rand",
  "seldom_state",
  "serde",
+ "serde_json",
  "tokio",
  "tokio-util",
 ]

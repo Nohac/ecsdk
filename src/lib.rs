@@ -1,13 +1,15 @@
 pub mod app;
 pub mod backend;
 pub mod backend_mock;
-pub mod msg;
 pub mod client;
 pub mod container;
 pub mod daemon;
 pub mod ipc;
 pub mod lifecycle;
+pub mod msg;
 pub mod protocol;
 pub mod render;
+pub mod replay;
 pub mod replicon_transport;
+pub mod state_event;
 pub mod task;

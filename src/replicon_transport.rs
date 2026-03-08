@@ -10,8 +10,7 @@ use tokio_util::bytes::Bytes;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
 use crate::container::*;
-use crate::msg::{Msg, PacketsReady, SetAppExit};
-use crate::protocol::{LogEvent, ServerExitNotice, ShutdownRequest};
+use crate::msg::AppExit;
 use crate::task::SpawnTask;
 
 // ---------------------------------------------------------------------------
@@ -104,6 +103,8 @@ impl Plugin for SharedReplicationPlugin {
 
 use std::collections::HashMap;
 
+use crate::protocol::{LogEvent, ServerExitNotice, ShutdownRequest};
+
 struct ServerClientChannels {
     from_client_rx: mpsc::UnboundedReceiver<RepliconPacket>,
     to_client_tx: mpsc::UnboundedSender<RepliconPacket>,
@@ -133,25 +134,7 @@ impl Plugin for ServerTransportPlugin {
     }
 }
 
-// ── Transport messages ──
-
-pub enum TransportMsg {
-    AcceptClient(AcceptClientCmd),
-    UnregisterClient(UnregisterClientCmd),
-    InsertClientBridge(InsertClientBridgeCmd),
-    RemoveClientBridge(RemoveClientBridgeCmd),
-}
-
-impl Msg for TransportMsg {
-    fn apply(self: Box<Self>, commands: &mut Commands) {
-        match *self {
-            Self::AcceptClient(cmd) => commands.queue(cmd),
-            Self::UnregisterClient(cmd) => commands.queue(cmd),
-            Self::InsertClientBridge(cmd) => commands.queue(cmd),
-            Self::RemoveClientBridge(cmd) => commands.queue(cmd),
-        }
-    }
-}
+// ── Transport command structs ──
 
 pub struct AcceptClientCmd {
     stream: interprocess::local_socket::tokio::Stream,
@@ -171,12 +154,15 @@ impl Command for AcceptClientCmd {
             let mut to_client_rx = to_client_rx;
             let wake = client_cmd.clone();
             run_bridge(stream, &mut to_client_rx, &from_client_tx, move || {
-                wake.send(PacketsReady);
+                wake.wake();
             })
             .await;
 
             let entity = client_cmd.entity();
-            client_cmd.send(TransportMsg::UnregisterClient(UnregisterClientCmd { entity }));
+            client_cmd.send(move |world: &mut World| {
+                UnregisterClientCmd { entity }.apply(world);
+            });
+            client_cmd.wake();
         });
 
         world.flush();
@@ -240,7 +226,10 @@ fn spawn_server_listener(mut commands: Commands) {
                 }
             };
 
-            cmd.send(TransportMsg::AcceptClient(AcceptClientCmd { stream }));
+            cmd.send(move |world: &mut World| {
+                AcceptClientCmd { stream }.apply(world);
+            });
+            cmd.wake();
         }
     });
 }
@@ -310,7 +299,10 @@ fn spawn_client_connection(mut commands: Commands) {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("Failed to connect to daemon: {e}");
-                cmd.send(SetAppExit);
+                cmd.send(|world: &mut World| {
+                    world.resource_mut::<AppExit>().0 = true;
+                });
+                cmd.wake();
                 return;
             }
         };
@@ -318,19 +310,28 @@ fn spawn_client_connection(mut commands: Commands) {
         let (to_server_tx, mut to_server_rx) = mpsc::unbounded_channel::<RepliconPacket>();
         let (from_server_tx, from_server_rx) = mpsc::unbounded_channel::<RepliconPacket>();
 
-        cmd.send(TransportMsg::InsertClientBridge(InsertClientBridgeCmd {
-            from_server_rx,
-            to_server_tx,
-        }));
+        cmd.send(move |world: &mut World| {
+            InsertClientBridgeCmd {
+                from_server_rx,
+                to_server_tx,
+            }
+            .apply(world);
+        });
+        cmd.wake();
 
         let wake = cmd.clone();
         run_bridge(stream, &mut to_server_rx, &from_server_tx, move || {
-            wake.send(PacketsReady);
+            wake.wake();
         })
         .await;
 
-        cmd.send(TransportMsg::RemoveClientBridge(RemoveClientBridgeCmd));
-        cmd.send(SetAppExit);
+        cmd.send(|world: &mut World| {
+            RemoveClientBridgeCmd.apply(world);
+        });
+        cmd.send(|world: &mut World| {
+            world.resource_mut::<AppExit>().0 = true;
+        });
+        cmd.wake();
     });
 }
 

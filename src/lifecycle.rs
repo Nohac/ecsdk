@@ -5,7 +5,8 @@ use seldom_state::prelude::*;
 use crate::backend::ContainerBackend;
 use crate::backend::ContainerRuntime;
 use crate::container::*;
-use crate::msg::{AppExit, AppendLog, Msg, Queue};
+use crate::msg::ScheduleControl;
+use crate::state_event::{StateEvent, StateQueue};
 use crate::task::SpawnTask;
 
 // ── State components (container lifecycle) ──
@@ -53,67 +54,6 @@ pub struct ShutdownRequested(pub bool);
 /// Per-entity backend that knows which container it manages.
 #[derive(Component, Clone)]
 pub struct Backend(pub ContainerRuntime);
-
-// ── Lifecycle messages ──
-
-pub enum LifecycleMsg {
-    SetProgress(SetProgressCmd),
-    MarkDone(MarkDoneCmd),
-    RequestShutdown(RequestShutdownCmd),
-}
-
-impl Msg for LifecycleMsg {
-    fn apply(self: Box<Self>, commands: &mut Commands) {
-        match *self {
-            Self::SetProgress(cmd) => commands.queue(cmd),
-            Self::MarkDone(cmd) => commands.queue(cmd),
-            Self::RequestShutdown(cmd) => commands.queue(cmd),
-        }
-    }
-}
-
-pub struct SetProgressCmd {
-    pub entity: Entity,
-    pub downloaded: u64,
-    pub total: u64,
-}
-
-impl Command for SetProgressCmd {
-    fn apply(self, world: &mut World) {
-        if let Some(mut dp) = world.get_mut::<DownloadProgress>(self.entity) {
-            dp.downloaded = self.downloaded;
-            dp.total = self.total;
-        }
-    }
-}
-
-pub struct MarkDoneCmd {
-    pub entity: Entity,
-}
-
-impl Command for MarkDoneCmd {
-    fn apply(self, world: &mut World) {
-        if world.get_entity(self.entity).is_ok() {
-            world.entity_mut(self.entity).insert(Done::Success);
-        }
-    }
-}
-
-pub struct RequestShutdownCmd;
-
-impl Command for RequestShutdownCmd {
-    fn apply(self, world: &mut World) {
-        world.resource_mut::<ShutdownRequested>().0 = true;
-        if let Some(sys) = world
-            .query_filtered::<Entity, With<SystemEntity>>()
-            .iter(world)
-            .next()
-            && let Some(mut log_buf) = world.get_mut::<LogBuffer>(sys)
-        {
-            log_buf.push("Shutting down...");
-        }
-    }
-}
 
 // ── Triggers ──
 
@@ -200,12 +140,14 @@ fn on_pulling_image(
     trigger: On<Insert, PullingImage>,
     mut commands: Commands,
     backends: Query<&Backend>,
+    names: Query<&ContainerName>,
 ) {
     let entity = trigger.event_target();
     let Ok(backend) = backends.get(entity) else {
         return;
     };
     let backend = backend.0.clone();
+    let container_name = names.get(entity).map(|n| n.0.clone()).unwrap_or_default();
 
     commands.entity(entity).insert(DownloadProgress {
         downloaded: 0,
@@ -219,18 +161,27 @@ fn on_pulling_image(
         let _ = backend
             .pull_image(
                 move |p| {
-                    cmd_progress.send(LifecycleMsg::SetProgress(SetProgressCmd {
-                        entity,
-                        downloaded: p.downloaded,
-                        total: p.total,
-                    }));
+                    let downloaded = p.downloaded;
+                    let total = p.total;
+                    cmd_progress.send(move |world: &mut World| {
+                        if let Some(mut dp) = world.get_mut::<DownloadProgress>(entity) {
+                            dp.downloaded = downloaded;
+                            dp.total = total;
+                        }
+                        world.commands().tick();
+                    });
                 },
                 move |text| {
-                    cmd_logs.send(AppendLog { entity, text });
+                    cmd_logs.send(move |world: &mut World| {
+                        if let Some(mut log_buf) = world.get_mut::<LogBuffer>(entity) {
+                            log_buf.push(text);
+                        }
+                        world.commands().tick();
+                    });
                 },
             )
             .await;
-        cmd.send(LifecycleMsg::MarkDone(MarkDoneCmd { entity }));
+        cmd.send_state(StateEvent::MarkDone { container_name });
     });
 }
 
@@ -238,6 +189,7 @@ fn on_starting(
     trigger: On<Insert, Starting>,
     mut commands: Commands,
     backends: Query<&Backend>,
+    names: Query<&ContainerName>,
     mut logs: Query<&mut LogBuffer>,
 ) {
     let entity = trigger.event_target();
@@ -250,38 +202,37 @@ fn on_starting(
         return;
     };
     let backend = backend.0.clone();
+    let container_name = names.get(entity).map(|n| n.0.clone()).unwrap_or_default();
 
     commands.entity(entity).spawn_task(move |cmd| async move {
         let entity = cmd.entity();
         let cmd_logs = cmd.clone();
         let _ = backend
             .boot_container(move |text| {
-                cmd_logs.send(AppendLog { entity, text });
+                cmd_logs.send(move |world: &mut World| {
+                    if let Some(mut log_buf) = world.get_mut::<LogBuffer>(entity) {
+                        log_buf.push(text);
+                    }
+                    world.commands().tick();
+                });
             })
             .await;
-        cmd.send(LifecycleMsg::MarkDone(MarkDoneCmd { entity }));
+        cmd.send_state(StateEvent::MarkDone { container_name });
     });
 }
 
-fn on_running(
-    _trigger: On<Insert, Running>,
-    mut logs: Query<&mut LogBuffer>,
-    queue: Res<Queue>,
-) {
+fn on_running(_trigger: On<Insert, Running>, mut logs: Query<&mut LogBuffer>) {
     let entity = _trigger.event_target();
     if let Ok(mut log_buf) = logs.get_mut(entity) {
         log_buf.push("Container started");
     }
-    queue.send(AppendLog {
-        entity,
-        text: String::new(),
-    });
 }
 
 fn on_stopping(
     trigger: On<Insert, Stopping>,
     mut commands: Commands,
     backends: Query<&Backend>,
+    names: Query<&ContainerName>,
     mut logs: Query<&mut LogBuffer>,
 ) {
     let entity = trigger.event_target();
@@ -294,27 +245,19 @@ fn on_stopping(
         return;
     };
     let backend = backend.0.clone();
+    let container_name = names.get(entity).map(|n| n.0.clone()).unwrap_or_default();
 
     commands.entity(entity).spawn_task(move |cmd| async move {
-        let entity = cmd.entity();
         let _ = backend.stop_container().await;
-        cmd.send(LifecycleMsg::MarkDone(MarkDoneCmd { entity }));
+        cmd.send_state(StateEvent::MarkDone { container_name });
     });
 }
 
-fn on_stopped(
-    _trigger: On<Insert, Stopped>,
-    mut logs: Query<&mut LogBuffer>,
-    queue: Res<Queue>,
-) {
+fn on_stopped(_trigger: On<Insert, Stopped>, mut logs: Query<&mut LogBuffer>) {
     let entity = _trigger.event_target();
     if let Ok(mut log_buf) = logs.get_mut(entity) {
         log_buf.push("Container stopped");
     }
-    queue.send(AppendLog {
-        entity,
-        text: String::new(),
-    });
 }
 
 // ── Orchestrator observers ──
@@ -323,18 +266,11 @@ fn on_all_running(
     _trigger: On<Insert, AllRunning>,
     mut logs: Query<&mut LogBuffer>,
     system_entity: Query<Entity, With<SystemEntity>>,
-    queue: Res<Queue>,
 ) {
     if let Ok(sys) = system_entity.single()
         && let Ok(mut log_buf) = logs.get_mut(sys)
     {
         log_buf.push("All containers ready.");
-    }
-    if let Ok(sys) = system_entity.single() {
-        queue.send(AppendLog {
-            entity: sys,
-            text: String::new(),
-        });
     }
 }
 
@@ -342,8 +278,7 @@ fn on_all_stopped(
     _trigger: On<Insert, AllStopped>,
     mut logs: Query<&mut LogBuffer>,
     system_entity: Query<Entity, With<SystemEntity>>,
-    mut exit: ResMut<AppExit>,
-    queue: Res<Queue>,
+    mut exit: ResMut<crate::msg::AppExit>,
 ) {
     if let Ok(sys) = system_entity.single()
         && let Ok(mut log_buf) = logs.get_mut(sys)
@@ -351,21 +286,12 @@ fn on_all_stopped(
         log_buf.push("All containers stopped.");
     }
     exit.0 = true;
-    if let Ok(sys) = system_entity.single() {
-        queue.send(AppendLog {
-            entity: sys,
-            text: String::new(),
-        });
-    }
 }
 
 // ── ShutdownAll handler ──
 
-fn handle_shutdown_all(
-    _trigger: On<ShutdownAll>,
-    queue: Res<Queue>,
-) {
-    queue.send(LifecycleMsg::RequestShutdown(RequestShutdownCmd));
+fn handle_shutdown_all(_trigger: On<ShutdownAll>, state_queue: Res<StateQueue>) {
+    state_queue.send(StateEvent::RequestShutdown);
 }
 
 // ── Test-only plugin (state machines without side-effect observers) ──
@@ -518,7 +444,10 @@ mod tests {
         let mut app = test_app();
         let c1 = spawn_container(&mut app, 0, Pending);
         let c2 = spawn_container(&mut app, 0, Pending);
-        let _orch = app.world_mut().spawn((Deploying, build_orchestrator_sm())).id();
+        let _orch = app
+            .world_mut()
+            .spawn((Deploying, build_orchestrator_sm()))
+            .id();
 
         app.update(); // both Pending → PullingImage
 
