@@ -5,15 +5,25 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build Commands
 
 - **Build:** `cargo build`
-- **Run:** `cargo run`
+- **Run:** `cargo run -p compose`
+- **Run daemon:** `cargo run -p compose -- --daemon`
 - **Test:** `cargo test`
-- **Single test:** `cargo test <test_name>`
+- **Single test:** `cargo test -p compose <test_name>`
 - **Lint:** `cargo clippy`
 - **Format:** `cargo fmt`
 
 ## Project Overview
 
-Experimental project exploring Bevy ECS as a framework for managing entities and systems, driven by an async Tokio runtime. Uses Bevy's `World`, `Schedule`, and observer pattern directly (no Bevy `App`) combined with Tokio's `select!` loop and mpsc channels for event-driven updates.
+Cargo workspace providing reusable `ecsdk_*` crates for building async ECS applications with Bevy ECS and Tokio. The `examples/compose` binary demonstrates the framework as an ECS-driven container orchestration demo.
+
+### Workspace Structure
+
+- **`crates/ecsdk_core`** — Foundational types: `WorldCallback`, `CmdQueue`, `MessageQueue<M>`, signals, `AppExit`, `ScheduleControl`, `ApplyMessage` trait
+- **`crates/ecsdk_app`** — Application bootstrap: `Receivers<M>`, `setup<M>()`, `run_async<M>()`
+- **`crates/ecsdk_tasks`** — Entity-scoped async tasks: `AsyncTask`, `TaskQueue<M>`, `SpawnTask<M>`, `CmdOnly`, `SpawnCmdTask`
+- **`crates/ecsdk_term`** — Terminal integration: `TerminalSize`, `TerminalEvent`, `TerminalGuard`, `Rect`, `TermPlugin`
+- **`crates/ecsdk_replicon`** — Replicon transport: `RepliconPacket`, `run_bridge()`, `ServerBridge`, `ClientBridge`, transport plugins
+- **`examples/compose`** — Container orchestration demo using all ecsdk crates
 
 ## Rust Conventions
 

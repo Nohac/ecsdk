@@ -1,13 +1,13 @@
 use bevy::app::prelude::*;
 use bevy::ecs::prelude::*;
+use ecsdk_core::{MessageQueue, ScheduleControl};
+use ecsdk_tasks::SpawnTask;
 use seldom_state::prelude::*;
 
 use crate::backend::ContainerBackend;
 use crate::backend::ContainerRuntime;
-use crate::cmd::ScheduleControl;
 use crate::container::*;
-use crate::message::{Message, MessageQueue};
-use crate::task::SpawnTask;
+use crate::message::Message;
 
 // ── State components (container lifecycle) ──
 
@@ -278,7 +278,7 @@ fn on_all_stopped(
     _trigger: On<Insert, AllStopped>,
     mut logs: Query<&mut LogBuffer>,
     system_entity: Query<Entity, With<SystemEntity>>,
-    mut exit: ResMut<crate::cmd::AppExit>,
+    mut exit: ResMut<ecsdk_core::AppExit>,
 ) {
     if let Ok(sys) = system_entity.single()
         && let Ok(mut log_buf) = logs.get_mut(sys)
@@ -290,7 +290,7 @@ fn on_all_stopped(
 
 // ── ShutdownAll handler ──
 
-fn handle_shutdown_all(_trigger: On<ShutdownAll>, state_queue: Res<MessageQueue>) {
+fn handle_shutdown_all(_trigger: On<ShutdownAll>, state_queue: Res<MessageQueue<Message>>) {
     state_queue.send(Message::RequestShutdown);
 }
 

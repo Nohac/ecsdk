@@ -1,36 +1,34 @@
+use std::collections::HashMap;
+
 use bevy::app::prelude::*;
 use bevy::ecs::prelude::*;
 use bevy::state::prelude::*;
 use bevy_replicon::prelude::*;
+use ecsdk_tasks::SpawnCmdTask;
 use futures_util::{SinkExt, StreamExt};
-use interprocess::local_socket::traits::tokio::Listener as _;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc;
 use tokio_util::bytes::Bytes;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
-use crate::cmd::AppExit;
-use crate::container::*;
-use crate::task::SpawnTask;
-
 // ---------------------------------------------------------------------------
 // Packet type — [channel_id: u8][data...] inside a length-delimited frame
 // ---------------------------------------------------------------------------
 
-struct RepliconPacket {
-    channel_id: u8,
-    data: Vec<u8>,
+pub struct RepliconPacket {
+    pub channel_id: u8,
+    pub data: Vec<u8>,
 }
 
 impl RepliconPacket {
-    fn encode(&self) -> Bytes {
+    pub fn encode(&self) -> Bytes {
         let mut buf = Vec::with_capacity(1 + self.data.len());
         buf.push(self.channel_id);
         buf.extend_from_slice(&self.data);
         buf.into()
     }
 
-    fn decode(frame: Bytes) -> Option<Self> {
+    pub fn decode(frame: Bytes) -> Option<Self> {
         if frame.is_empty() {
             return None;
         }
@@ -45,7 +43,7 @@ impl RepliconPacket {
 // Bidirectional bridge: framed stream ↔ mpsc channels
 // ---------------------------------------------------------------------------
 
-async fn run_bridge(
+pub async fn run_bridge(
     stream: impl AsyncRead + AsyncWrite + Send + Unpin,
     to_remote_rx: &mut mpsc::UnboundedReceiver<RepliconPacket>,
     from_remote_tx: &mpsc::UnboundedSender<RepliconPacket>,
@@ -77,33 +75,8 @@ async fn run_bridge(
 }
 
 // ---------------------------------------------------------------------------
-// Shared replication plugin — ensures identical registration order
-// ---------------------------------------------------------------------------
-
-pub struct SharedReplicationPlugin;
-
-impl Plugin for SharedReplicationPlugin {
-    fn build(&self, app: &mut App) {
-        app.replicate::<ContainerName>();
-        app.replicate::<ImageRef>();
-        app.replicate::<StartOrder>();
-        app.replicate::<ContainerPhase>();
-        app.replicate::<DownloadProgress>();
-        app.replicate::<SystemEntity>();
-
-        app.add_mapped_server_event::<LogEvent>(Channel::Ordered);
-        app.add_server_event::<ServerExitNotice>(Channel::Ordered);
-        app.add_client_event::<ShutdownRequest>(Channel::Ordered);
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Server transport plugin
 // ---------------------------------------------------------------------------
-
-use std::collections::HashMap;
-
-use crate::protocol::{LogEvent, ServerExitNotice, ShutdownRequest};
 
 struct ServerClientChannels {
     from_client_rx: mpsc::UnboundedReceiver<RepliconPacket>,
@@ -111,7 +84,7 @@ struct ServerClientChannels {
 }
 
 #[derive(Resource, Default)]
-struct ServerBridge {
+pub struct ServerBridge {
     clients: HashMap<Entity, ServerClientChannels>,
 }
 
@@ -130,17 +103,19 @@ impl Plugin for ServerTransportPlugin {
             PostUpdate,
             server_send_packets.in_set(ServerSystems::SendPackets),
         );
-        app.add_systems(Startup, spawn_server_listener);
     }
 }
 
 // ── Transport command structs ──
 
-pub struct AcceptClientCmd {
-    stream: interprocess::local_socket::tokio::Stream,
+pub struct AcceptClientCmd<S> {
+    pub stream: S,
 }
 
-impl Command for AcceptClientCmd {
+impl<S> Command for AcceptClientCmd<S>
+where
+    S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
+{
     fn apply(self, world: &mut World) {
         let (to_client_tx, to_client_rx) = mpsc::unbounded_channel::<RepliconPacket>();
         let (from_client_tx, from_client_rx) = mpsc::unbounded_channel::<RepliconPacket>();
@@ -150,7 +125,7 @@ impl Command for AcceptClientCmd {
         let client_id = client.id();
 
         let stream = self.stream;
-        client.spawn_task(move |client_cmd| async move {
+        client.spawn_cmd_task(move |client_cmd| async move {
             let mut to_client_rx = to_client_rx;
             let wake = client_cmd.clone();
             run_bridge(stream, &mut to_client_rx, &from_client_tx, move || {
@@ -195,8 +170,8 @@ impl Command for UnregisterClientCmd {
 }
 
 pub struct InsertClientBridgeCmd {
-    from_server_rx: mpsc::UnboundedReceiver<RepliconPacket>,
-    to_server_tx: mpsc::UnboundedSender<RepliconPacket>,
+    pub from_server_rx: mpsc::UnboundedReceiver<RepliconPacket>,
+    pub to_server_tx: mpsc::UnboundedSender<RepliconPacket>,
 }
 
 impl Command for InsertClientBridgeCmd {
@@ -214,28 +189,6 @@ impl Command for RemoveClientBridgeCmd {
     fn apply(self, world: &mut World) {
         world.remove_resource::<ClientBridge>();
     }
-}
-
-fn spawn_server_listener(mut commands: Commands) {
-    commands.spawn_empty().spawn_task(move |cmd| async move {
-        let listener = crate::ipc::create_listener().expect("Failed to bind daemon socket");
-        eprintln!("Daemon listening on {}", crate::ipc::SOCKET_PATH);
-
-        loop {
-            let stream = match listener.accept().await {
-                Ok(stream) => stream,
-                Err(e) => {
-                    eprintln!("Accept failed: {e}");
-                    continue;
-                }
-            };
-
-            cmd.send(move |world: &mut World| {
-                AcceptClientCmd { stream }.apply(world);
-            })
-            .wake();
-        }
-    });
 }
 
 fn server_manage_state(
@@ -293,48 +246,7 @@ impl Plugin for ClientTransportPlugin {
             PostUpdate,
             client_send_packets.in_set(ClientSystems::SendPackets),
         );
-        app.add_systems(Startup, spawn_client_connection);
     }
-}
-
-fn spawn_client_connection(mut commands: Commands) {
-    commands.spawn_empty().spawn_task(move |cmd| async move {
-        let stream = match crate::ipc::connect().await {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("Failed to connect to daemon: {e}");
-                cmd.send(|world: &mut World| {
-                    world.resource_mut::<AppExit>().0 = true;
-                })
-                .wake();
-                return;
-            }
-        };
-
-        let (to_server_tx, mut to_server_rx) = mpsc::unbounded_channel::<RepliconPacket>();
-        let (from_server_tx, from_server_rx) = mpsc::unbounded_channel::<RepliconPacket>();
-
-        cmd.send(move |world: &mut World| {
-            InsertClientBridgeCmd {
-                from_server_rx,
-                to_server_tx,
-            }
-            .apply(world);
-        })
-        .wake();
-
-        let wake = cmd.clone();
-        run_bridge(stream, &mut to_server_rx, &from_server_tx, move || {
-            wake.wake();
-        })
-        .await;
-
-        cmd.send(|world: &mut World| {
-            RemoveClientBridgeCmd.apply(world);
-            world.resource_mut::<AppExit>().0 = true;
-        })
-        .wake();
-    });
 }
 
 fn client_manage_state(

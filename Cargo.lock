@@ -1379,6 +1379,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "compose"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "bevy_replicon",
+ "clap",
+ "crossterm",
+ "ecsdk_app",
+ "ecsdk_core",
+ "ecsdk_replicon",
+ "ecsdk_tasks",
+ "ecsdk_term",
+ "interprocess",
+ "rand",
+ "seldom_state",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "concurrent-queue"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1723,21 +1744,54 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 
 [[package]]
-name = "ecstest"
+name = "ecsdk_app"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "ecsdk_core",
+ "tokio",
+]
+
+[[package]]
+name = "ecsdk_core"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "tokio",
+]
+
+[[package]]
+name = "ecsdk_replicon"
 version = "0.1.0"
 dependencies = [
  "bevy",
  "bevy_replicon",
- "clap",
- "crossterm",
+ "ecsdk_core",
+ "ecsdk_tasks",
  "futures-util",
- "interprocess",
- "rand",
- "seldom_state",
- "serde",
- "serde_json",
  "tokio",
  "tokio-util",
+]
+
+[[package]]
+name = "ecsdk_tasks"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "ecsdk_core",
+ "tokio",
+ "tokio-util",
+]
+
+[[package]]
+name = "ecsdk_term"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "crossterm",
+ "ecsdk_core",
+ "ecsdk_tasks",
+ "futures-util",
 ]
 
 [[package]]

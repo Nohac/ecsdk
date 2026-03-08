@@ -3,15 +3,15 @@ use std::collections::HashMap;
 use bevy::app::prelude::*;
 use bevy::ecs::prelude::*;
 use bevy_replicon::prelude::*;
+use ecsdk_core::{AppExit, MessageQueue};
+use ecsdk_tasks::SpawnTask;
 use tokio::signal::ctrl_c;
 
 use crate::backend_mock::MockBackend;
-use crate::cmd::AppExit;
 use crate::container::*;
 use crate::lifecycle::*;
-use crate::message::{Message, MessageQueue};
-use crate::replicon_transport::*;
-use crate::task::SpawnTask;
+use crate::message::Message;
+use crate::replicon::{SharedReplicationPlugin, spawn_server_listener};
 
 // ---------------------------------------------------------------------------
 // Daemon-specific ECS systems and observers
@@ -69,7 +69,8 @@ impl Plugin for DaemonPlugin {
         // Replicon server
         app.add_plugins(RepliconPlugins.build().set(ServerPlugin::new(PostUpdate)));
         app.add_plugins(SharedReplicationPlugin);
-        app.add_plugins(ServerTransportPlugin);
+        app.add_plugins(ecsdk_replicon::ServerTransportPlugin);
+        app.add_systems(Startup, spawn_server_listener);
 
         // Lifecycle + log/exit broadcast
         app.add_plugins(LifecyclePlugin);
@@ -100,10 +101,10 @@ pub async fn run_daemon() {
         ("web-frontend", "myapp/web:latest", 2),
     ];
 
-    let (mut app, rx) = crate::app::setup();
+    let (mut app, rx) = ecsdk_app::setup::<Message>();
     app.add_plugins(DaemonPlugin);
 
-    let state_queue = app.world().resource::<MessageQueue>().clone();
+    let state_queue = app.world().resource::<MessageQueue<Message>>().clone();
     for (name, image, order) in containers {
         state_queue.send(Message::SpawnContainer {
             name: name.into(),
@@ -124,7 +125,7 @@ pub async fn run_daemon() {
     // Backend factory — attach backends to containers spawned by state events
     app.add_observer(attach_mock_backend);
 
-    crate::app::run_async(app, rx).await;
+    ecsdk_app::run_async(app, rx).await;
 
     let _ = std::fs::remove_file(crate::ipc::SOCKET_PATH);
     eprintln!("Daemon shut down");

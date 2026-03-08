@@ -3,21 +3,21 @@ use std::time::Duration;
 
 use bevy::app::App;
 use bevy::ecs::prelude::World;
+use ecsdk_core::{
+    AppExit, ApplyMessage, CmdQueue, MessageQueue, TickSignal, WakeSignal, WorldCallback,
+};
 use tokio::runtime::Handle;
 use tokio::sync::{Notify, mpsc};
 use tokio::time::interval;
 
-use crate::cmd::{AppExit, CmdQueue, TickSignal, WakeSignal, WorldCallback};
-use crate::message::{Message, MessageQueue};
-
-pub struct Receivers {
-    state_rx: mpsc::UnboundedReceiver<Message>,
+pub struct Receivers<M: ApplyMessage> {
+    state_rx: mpsc::UnboundedReceiver<M>,
     cmd_rx: mpsc::UnboundedReceiver<WorldCallback>,
     tick: Arc<Notify>,
     wake: Arc<Notify>,
 }
 
-pub fn setup() -> (App, Receivers) {
+pub fn setup<M: ApplyMessage>() -> (App, Receivers<M>) {
     let (state_tx, state_rx) = mpsc::unbounded_channel();
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let tick = Arc::new(Notify::new());
@@ -29,7 +29,7 @@ pub fn setup() -> (App, Receivers) {
         Handle::current(),
         WakeSignal(wake.clone()),
     ));
-    app.insert_resource(MessageQueue::new(state_tx));
+    app.insert_resource(MessageQueue::<M>::new(state_tx));
     app.insert_resource(TickSignal(tick.clone()));
     app.insert_resource(WakeSignal(wake.clone()));
     app.init_resource::<AppExit>();
@@ -45,7 +45,7 @@ pub fn setup() -> (App, Receivers) {
     )
 }
 
-pub async fn run_async(mut app: App, mut rx: Receivers) {
+pub async fn run_async<M: ApplyMessage>(mut app: App, mut rx: Receivers<M>) {
     let mut tick_interval = interval(Duration::from_millis(1000 / 5));
     let mut needs_tick = false;
 

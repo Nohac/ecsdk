@@ -1,13 +1,26 @@
+mod backend;
+mod backend_mock;
+mod client;
+mod container;
+mod daemon;
+mod ipc;
+mod lifecycle;
+mod message;
+mod protocol;
+mod render;
+mod replay;
+mod replicon;
+
 use std::io::IsTerminal;
 use std::time::Duration;
 
 use clap::Parser;
+use render::RenderMode;
 use tokio::net::UnixStream;
 
-use ecstest::client::run_client;
-use ecstest::daemon::run_daemon;
-use ecstest::ipc::SOCKET_PATH;
-use ecstest::render::RenderMode;
+use crate::client::run_client;
+use crate::daemon::run_daemon;
+use crate::ipc::SOCKET_PATH;
 
 #[derive(Parser)]
 #[command(about = "ECS-driven container orchestration demo")]

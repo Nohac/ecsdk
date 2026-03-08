@@ -1,0 +1,44 @@
+mod plain;
+mod tui;
+
+pub use ecsdk_term::TerminalGuard;
+
+use bevy::app::prelude::*;
+use clap::ValueEnum;
+use ecsdk_term::TermPlugin;
+
+use crate::container::build_merged_log_view;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, ValueEnum)]
+pub enum RenderMode {
+    Plain,
+    Tui,
+    None,
+}
+
+pub struct CrosstermPlugin {
+    mode: RenderMode,
+}
+
+impl CrosstermPlugin {
+    pub fn new(mode: RenderMode) -> Self {
+        Self { mode }
+    }
+}
+
+impl Plugin for CrosstermPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(Update, build_merged_log_view);
+        match self.mode {
+            RenderMode::Tui => {
+                app.insert_resource(TerminalGuard::new());
+                app.add_plugins(TermPlugin);
+                app.add_systems(PostUpdate, tui::render_tui);
+            }
+            RenderMode::Plain => {
+                app.add_systems(PostUpdate, plain::render_plain);
+            }
+            RenderMode::None => {}
+        }
+    }
+}

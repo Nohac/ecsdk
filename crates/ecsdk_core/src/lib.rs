@@ -5,26 +5,24 @@ use tokio::runtime::Handle;
 use tokio::sync::Notify;
 use tokio::sync::mpsc;
 
-use crate::message::{Message, MessageQueue};
-
 /// Boxed closure that mutates the world directly from an async task.
 pub type WorldCallback = Box<dyn FnOnce(&mut World) + Send>;
 
 /// Signals the main loop to run `app.update()` at the next fps boundary.
 #[derive(Resource, Clone)]
-pub struct TickSignal(pub(crate) Arc<Notify>);
+pub struct TickSignal(pub Arc<Notify>);
 
 /// Signals the main loop to run `app.update()` immediately.
 #[derive(Resource, Clone)]
-pub struct WakeSignal(pub(crate) Arc<Notify>);
+pub struct WakeSignal(pub Arc<Notify>);
 
 /// Resource that bridges async tasks to the ECS world.
 /// Carries a command channel sender and an optional Tokio runtime handle.
 #[derive(Resource, Clone)]
 pub struct CmdQueue {
-    pub(crate) tx: mpsc::UnboundedSender<WorldCallback>,
-    pub(crate) handle: Option<Handle>,
-    pub(crate) wake: WakeSignal,
+    pub tx: mpsc::UnboundedSender<WorldCallback>,
+    pub handle: Option<Handle>,
+    pub wake: WakeSignal,
 }
 
 impl CmdQueue {
@@ -57,42 +55,6 @@ impl CmdQueue {
     }
 }
 
-/// Handle passed to async task closures. Provides access to the owning entity,
-/// a way to send world-mutating commands, and state events back to the ECS.
-#[derive(Clone)]
-pub struct TaskQueue {
-    entity: Entity,
-    queue: CmdQueue,
-    state_queue: MessageQueue,
-}
-
-impl TaskQueue {
-    pub(crate) fn new(entity: Entity, queue: CmdQueue, state_queue: MessageQueue) -> Self {
-        Self {
-            entity,
-            queue,
-            state_queue,
-        }
-    }
-
-    pub fn entity(&self) -> Entity {
-        self.entity
-    }
-
-    pub fn send(&self, f: impl FnOnce(&mut World) + Send + 'static) -> &Self {
-        self.queue.send(f);
-        self
-    }
-
-    pub fn send_state(&self, event: Message) {
-        self.state_queue.send(event);
-    }
-
-    pub fn wake(&self) {
-        self.queue.wake();
-    }
-}
-
 // ── Scheduling ──
 
 /// Extension trait for requesting schedule updates.
@@ -122,3 +84,40 @@ impl ScheduleControl for World {
 /// Checked by main loop after each cycle to know when to exit.
 #[derive(Resource, Default)]
 pub struct AppExit(pub bool);
+
+// ── ApplyMessage trait ──
+
+/// Trait for domain message types that can mutate the world.
+pub trait ApplyMessage: Send + 'static {
+    fn apply(&self, world: &mut World);
+}
+
+// ── Generic MessageQueue ──
+
+#[derive(Resource)]
+pub struct MessageQueue<M: ApplyMessage> {
+    tx: mpsc::UnboundedSender<M>,
+}
+
+impl<M: ApplyMessage> Clone for MessageQueue<M> {
+    fn clone(&self) -> Self {
+        Self {
+            tx: self.tx.clone(),
+        }
+    }
+}
+
+impl<M: ApplyMessage> MessageQueue<M> {
+    pub fn new(tx: mpsc::UnboundedSender<M>) -> Self {
+        Self { tx }
+    }
+
+    pub fn send(&self, msg: M) {
+        let _ = self.tx.send(msg);
+    }
+
+    pub fn test() -> Self {
+        let (tx, _) = mpsc::unbounded_channel();
+        Self { tx }
+    }
+}

@@ -1,0 +1,11 @@
+[package]
+name = "ecsdk_term"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ecsdk_core = { workspace = true }
+ecsdk_tasks = { workspace = true }
+bevy = { workspace = true }
+crossterm = { workspace = true }
+futures-util = { workspace = true }

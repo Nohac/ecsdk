@@ -1,6 +1,6 @@
 use bevy::ecs::prelude::*;
+use ecsdk_core::ApplyMessage;
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc;
 
 use crate::container::*;
 use crate::lifecycle::{Pending, ShutdownRequested, build_container_sm};
@@ -18,8 +18,8 @@ pub enum Message {
     RequestShutdown,
 }
 
-impl Message {
-    pub fn apply(&self, world: &mut World) {
+impl ApplyMessage for Message {
+    fn apply(&self, world: &mut World) {
         match self {
             Self::SpawnContainer {
                 name,
@@ -60,25 +60,5 @@ impl Message {
                 }
             }
         }
-    }
-}
-
-#[derive(Resource, Clone)]
-pub struct MessageQueue {
-    tx: mpsc::UnboundedSender<Message>,
-}
-
-impl MessageQueue {
-    pub fn new(tx: mpsc::UnboundedSender<Message>) -> Self {
-        Self { tx }
-    }
-
-    pub fn send(&self, msg: Message) {
-        let _ = self.tx.send(msg);
-    }
-
-    pub fn test() -> Self {
-        let (tx, _) = mpsc::unbounded_channel();
-        Self { tx }
     }
 }

@@ -1,0 +1,13 @@
+[package]
+name = "ecsdk_replicon"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ecsdk_core = { workspace = true }
+ecsdk_tasks = { workspace = true }
+bevy = { workspace = true, features = ["bevy_state"] }
+bevy_replicon = { workspace = true }
+tokio = { workspace = true, features = ["rt", "sync", "io-util"] }
+tokio-util = { workspace = true }
+futures-util = { workspace = true }

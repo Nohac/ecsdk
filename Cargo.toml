@@ -1,18 +1,32 @@
-[package]
-name = "ecstest"
-version = "0.1.0"
-edition = "2024"
+[workspace]
+members = [
+    "crates/ecsdk_core",
+    "crates/ecsdk_app",
+    "crates/ecsdk_tasks",
+    "crates/ecsdk_term",
+    "crates/ecsdk_replicon",
+    "examples/compose",
+]
+resolver = "3"
 
-[dependencies]
-bevy = { version = "0.18", default-features = false, features = ["bevy_state", "multi_threaded", "serialize"] }
-bevy_replicon = { version = "0.39", default-features = false, features = ["server", "client"] }
-serde = { version = "1.0", features = ["derive"] }
-tokio = { version = "1.49.0", features = ["full"] }
-rand = "0.9"
+[workspace.dependencies]
+# Internal
+ecsdk_core = { path = "crates/ecsdk_core" }
+ecsdk_app = { path = "crates/ecsdk_app" }
+ecsdk_tasks = { path = "crates/ecsdk_tasks" }
+ecsdk_term = { path = "crates/ecsdk_term" }
+ecsdk_replicon = { path = "crates/ecsdk_replicon" }
+
+# External
+bevy = { version = "0.18", default-features = false, features = ["multi_threaded"] }
+tokio = { version = "1.49", features = ["full"] }
+tokio-util = { version = "0.7", features = ["codec"] }
 crossterm = { version = "0.29", features = ["event-stream"] }
 futures-util = { version = "0.3", features = ["sink"] }
-clap = { version = "4", features = ["derive"] }
-tokio-util = { version = "0.7", features = ["codec"] }
-interprocess = { version = "2.4", features = ["tokio"] }
-seldom_state = { git = "https://github.com/Wiwip/seldom_state.git", rev = "cc6c89f" }
+bevy_replicon = { version = "0.39", default-features = false, features = ["server", "client"] }
+serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+seldom_state = { git = "https://github.com/Wiwip/seldom_state.git", rev = "cc6c89f" }
+interprocess = { version = "2.4", features = ["tokio"] }
+clap = { version = "4", features = ["derive"] }
+rand = "0.9"

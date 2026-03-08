@@ -3,16 +3,13 @@ use std::io::{Write, stdout};
 
 use bevy::ecs::prelude::*;
 use crossterm::{
-    ExecutableCommand, QueueableCommand,
-    cursor::{Hide, MoveTo, Show},
+    QueueableCommand,
+    cursor::MoveTo,
     style::{Attribute, Color, Print, ResetColor, SetAttribute, SetForegroundColor},
-    terminal::{
-        Clear, ClearType, DisableLineWrap, EnableLineWrap, EnterAlternateScreen,
-        LeaveAlternateScreen, ScrollUp, disable_raw_mode, enable_raw_mode,
-    },
+    terminal::{Clear, ClearType, ScrollUp},
 };
+use ecsdk_term::{Rect, TerminalSize, reset_scroll_region, set_scroll_region};
 
-use super::TerminalSize;
 use crate::container::*;
 
 const SERVICE_COLORS: [Color; 6] = [
@@ -23,26 +20,6 @@ const SERVICE_COLORS: [Color; 6] = [
     Color::Blue,
     Color::Red,
 ];
-
-/// A screen rectangle: col, row, width, height (all in terminal cells).
-#[derive(Clone, Copy)]
-struct Rect {
-    col: u16,
-    row: u16,
-    w: u16,
-    h: u16,
-}
-
-/// Set the terminal scroll region via raw ANSI escape (CSI r).
-/// top and bottom are 1-based row numbers.
-fn set_scroll_region(out: &mut impl Write, top: u16, bottom: u16) {
-    let _ = write!(out, "\x1b[{};{}r", top, bottom);
-}
-
-/// Reset scroll region to full terminal.
-fn reset_scroll_region(out: &mut impl Write) {
-    let _ = write!(out, "\x1b[r");
-}
 
 fn phase_color(phase: ContainerPhase) -> (Color, Option<Attribute>) {
     match phase {
@@ -96,43 +73,6 @@ impl TuiRenderState {
         self.service_color_map.insert(entity, c);
         c
     }
-}
-
-// ── Terminal guard ──
-
-/// RAII guard that initializes the terminal on creation and restores it on drop.
-#[derive(Resource, Default)]
-pub struct TerminalGuard;
-
-impl TerminalGuard {
-    pub fn new() -> Self {
-        let original = std::panic::take_hook();
-        std::panic::set_hook(Box::new(move |info| {
-            terminal_teardown();
-            original(info);
-        }));
-        let mut out = stdout();
-        let _ = enable_raw_mode();
-        let _ = out.execute(EnterAlternateScreen);
-        let _ = out.execute(Hide);
-        let _ = out.execute(DisableLineWrap);
-        Self
-    }
-}
-
-impl Drop for TerminalGuard {
-    fn drop(&mut self) {
-        terminal_teardown();
-    }
-}
-
-fn terminal_teardown() {
-    let mut out = stdout();
-    reset_scroll_region(&mut out);
-    let _ = out.execute(EnableLineWrap);
-    let _ = out.execute(Show);
-    let _ = out.execute(LeaveAlternateScreen);
-    let _ = disable_raw_mode();
 }
 
 // ── Section renderers ──

@@ -1,0 +1,10 @@
+[package]
+name = "ecsdk_tasks"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ecsdk_core = { workspace = true }
+bevy = { workspace = true }
+tokio = { workspace = true, features = ["rt"] }
+tokio-util = { workspace = true }

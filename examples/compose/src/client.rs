@@ -3,12 +3,14 @@ use bevy::ecs::prelude::*;
 use bevy::state::prelude::*;
 use bevy_replicon::prelude::*;
 use crossterm::event::{Event, KeyCode, KeyModifiers};
+use ecsdk_core::AppExit;
+use ecsdk_term::TerminalEvent;
 
-use crate::cmd::AppExit;
 use crate::container::*;
+use crate::message::Message;
 use crate::protocol::{LogEvent, ServerExitNotice, ShutdownRequest};
-use crate::render::{CrosstermPlugin, RenderMode, TerminalEvent};
-use crate::replicon_transport::*;
+use crate::render::{CrosstermPlugin, RenderMode};
+use crate::replicon::{SharedReplicationPlugin, spawn_client_connection};
 
 // ---------------------------------------------------------------------------
 // Client-specific observers and systems
@@ -67,7 +69,8 @@ impl Plugin for ClientPlugin {
         // Replicon client
         app.add_plugins(RepliconPlugins);
         app.add_plugins(SharedReplicationPlugin);
-        app.add_plugins(ClientTransportPlugin);
+        app.add_plugins(ecsdk_replicon::ClientTransportPlugin);
+        app.add_systems(Startup, spawn_client_connection);
 
         // Rendering
         app.add_plugins(CrosstermPlugin::new(self.0));
@@ -89,7 +92,7 @@ impl Plugin for ClientPlugin {
 // ---------------------------------------------------------------------------
 
 pub async fn run_client(mode: RenderMode) {
-    let (mut app, rx) = crate::app::setup();
+    let (mut app, rx) = ecsdk_app::setup::<Message>();
     app.add_plugins(ClientPlugin(mode));
-    crate::app::run_async(app, rx).await;
+    ecsdk_app::run_async(app, rx).await;
 }
