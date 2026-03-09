@@ -39,13 +39,13 @@ pub fn spawn_server_listener(mut commands: Commands) {
         .spawn_empty()
         .spawn_cmd_task(move |cmd| async move {
             let listener = crate::ipc::create_listener().expect("Failed to bind daemon socket");
-            eprintln!("Daemon listening on {}", crate::ipc::SOCKET_PATH);
+            tracing::warn!("Daemon listening on {}", crate::ipc::SOCKET_PATH);
 
             loop {
                 let stream = match listener.accept().await {
                     Ok(stream) => stream,
                     Err(e) => {
-                        eprintln!("Accept failed: {e}");
+                        tracing::warn!("Accept failed: {e}");
                         continue;
                     }
                 };
@@ -74,7 +74,7 @@ pub fn spawn_client_connection(mut commands: Commands) {
                     .wake();
                 }
                 Err(e) => {
-                    eprintln!("Failed to connect to daemon: {e}");
+                    tracing::warn!("Failed to connect to daemon: {e}");
                     cmd.send(|world: &mut World| {
                         world.resource_mut::<AppExit>().0 = true;
                     })

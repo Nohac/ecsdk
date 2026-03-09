@@ -3,7 +3,10 @@ use bevy::ecs::prelude::*;
 use bevy::state::prelude::*;
 use bevy_replicon::prelude::*;
 use crossterm::event::{Event, KeyCode, KeyModifiers};
-use ecsdk_core::AppExit;
+use ecsdk_core::{AppExit, WakeSignal};
+use tracing_subscriber::Layer as _;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 use ecsdk_term::TerminalEvent;
 
 use crate::container::*;
@@ -72,6 +75,13 @@ impl Plugin for ClientPlugin {
         app.add_plugins(ecsdk_replicon::ClientTransportPlugin);
         app.add_systems(Startup, spawn_client_connection);
 
+        // Tracing → LogBuffer drain
+        app.add_systems(
+            PreUpdate,
+            crate::container::drain_tracing_logs
+                .run_if(resource_exists::<ecsdk_tracing::TracingReceiver>),
+        );
+
         // Rendering
         app.add_plugins(CrosstermPlugin::new(self.0));
         app.init_resource::<MergedLogView>();
@@ -93,6 +103,17 @@ impl Plugin for ClientPlugin {
 
 pub async fn run_client(mode: RenderMode) {
     let (mut app, rx) = ecsdk_app::setup::<Message>();
+
+    let wake = app.world().resource::<WakeSignal>().clone();
+    let (tracing_layer, tracing_receiver) = ecsdk_tracing::setup(wake);
+    tracing_subscriber::registry()
+        .with(tracing_layer.with_filter(
+            tracing_subscriber::filter::Targets::new()
+                .with_target("compose", tracing::Level::INFO),
+        ))
+        .init();
+    app.add_plugins(ecsdk_tracing::TracingPlugin::new(tracing_receiver));
+
     app.add_plugins(ClientPlugin(mode));
     ecsdk_app::run_async(app, rx).await;
 }

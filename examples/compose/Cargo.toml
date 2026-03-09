@@ -25,3 +25,6 @@ crossterm = { workspace = true }
 clap = { workspace = true }
 rand = { workspace = true }
 anyhow = { workspace = true }
+ecsdk_tracing = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

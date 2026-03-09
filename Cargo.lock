@@ -1392,12 +1392,15 @@ dependencies = [
  "ecsdk_replicon",
  "ecsdk_tasks",
  "ecsdk_term",
+ "ecsdk_tracing",
  "interprocess",
  "rand",
  "seldom_state",
  "serde",
  "serde_json",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -1801,6 +1804,17 @@ dependencies = [
  "ecsdk_core",
  "ecsdk_tasks",
  "futures-util",
+]
+
+[[package]]
+name = "ecsdk_tracing"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "ecsdk_core",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

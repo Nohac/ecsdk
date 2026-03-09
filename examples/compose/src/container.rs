@@ -86,6 +86,23 @@ pub struct MergedLogView {
     pub entries: Vec<MergedLogEntry>,
 }
 
+/// Drains tracing events into entity LogBuffers.
+pub fn drain_tracing_logs(
+    mut receiver: ResMut<ecsdk_tracing::TracingReceiver>,
+    mut logs: Query<&mut LogBuffer>,
+    system_entity: Query<Entity, With<SystemEntity>>,
+) {
+    while let Ok(event) = receiver.rx.try_recv() {
+        let target = event.entity.or_else(|| system_entity.single().ok());
+        let Some(target) = target else {
+            continue;
+        };
+        if let Ok(mut log_buf) = logs.get_mut(target) {
+            log_buf.push(event.message);
+        }
+    }
+}
+
 /// Incrementally appends new log lines from all entities into the merged view.
 pub fn build_merged_log_view(
     containers: Query<(Entity, &ContainerName, &LogBuffer), Without<SystemEntity>>,

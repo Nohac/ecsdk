@@ -1,0 +1,11 @@
+[package]
+name = "ecsdk_tracing"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ecsdk_core = { workspace = true }
+bevy = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }

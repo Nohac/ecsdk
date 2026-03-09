@@ -3,9 +3,12 @@ use std::collections::HashMap;
 use bevy::app::prelude::*;
 use bevy::ecs::prelude::*;
 use bevy_replicon::prelude::*;
-use ecsdk_core::{AppExit, MessageQueue};
+use ecsdk_core::{AppExit, MessageQueue, WakeSignal};
 use ecsdk_tasks::SpawnTask;
 use tokio::signal::ctrl_c;
+use tracing_subscriber::Layer as _;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 use crate::backend_mock::MockBackend;
 use crate::container::*;
@@ -74,6 +77,11 @@ impl Plugin for DaemonPlugin {
 
         // Lifecycle + log/exit broadcast
         app.add_plugins(LifecyclePlugin);
+        app.add_systems(
+            PreUpdate,
+            crate::container::drain_tracing_logs
+                .run_if(resource_exists::<ecsdk_tracing::TracingReceiver>),
+        );
         app.add_systems(Update, (send_log_events, send_exit_notice));
         app.add_observer(handle_shutdown_request);
 
@@ -102,6 +110,17 @@ pub async fn run_daemon() {
     ];
 
     let (mut app, rx) = ecsdk_app::setup::<Message>();
+
+    let wake = app.world().resource::<WakeSignal>().clone();
+    let (tracing_layer, tracing_receiver) = ecsdk_tracing::setup(wake);
+    tracing_subscriber::registry()
+        .with(tracing_layer.with_filter(
+            tracing_subscriber::filter::Targets::new()
+                .with_target("compose", tracing::Level::INFO),
+        ))
+        .init();
+    app.add_plugins(ecsdk_tracing::TracingPlugin::new(tracing_receiver));
+
     app.add_plugins(DaemonPlugin);
 
     let state_queue = app.world().resource::<MessageQueue<Message>>().clone();
@@ -128,7 +147,7 @@ pub async fn run_daemon() {
     ecsdk_app::run_async(app, rx).await;
 
     let _ = std::fs::remove_file(crate::ipc::SOCKET_PATH);
-    eprintln!("Daemon shut down");
+    tracing::info!("Daemon shut down");
 }
 
 fn attach_mock_backend(

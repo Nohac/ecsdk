@@ -6,6 +6,7 @@ members = [
     "crates/ecsdk_term",
     "crates/ecsdk_replicon",
     "crates/ecsdk_replicon_transport",
+    "crates/ecsdk_tracing",
     "examples/compose",
 ]
 resolver = "3"
@@ -18,6 +19,7 @@ ecsdk_tasks = { path = "crates/ecsdk_tasks" }
 ecsdk_term = { path = "crates/ecsdk_term" }
 ecsdk_replicon = { path = "crates/ecsdk_replicon" }
 ecsdk_replicon_transport = { path = "crates/ecsdk_replicon_transport" }
+ecsdk_tracing = { path = "crates/ecsdk_tracing" }
 
 # External
 bevy = { version = "0.18", default-features = false, features = ["multi_threaded"] }
@@ -33,3 +35,5 @@ interprocess = { version = "2.4", features = ["tokio"] }
 clap = { version = "4", features = ["derive"] }
 rand = "0.9"
 anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = "0.3"

@@ -3,6 +3,7 @@ use bevy::ecs::prelude::*;
 use ecsdk_core::{MessageQueue, ScheduleControl};
 use ecsdk_tasks::SpawnTask;
 use seldom_state::prelude::*;
+use tracing::Instrument;
 
 use crate::backend::ContainerBackend;
 use crate::backend::ContainerRuntime;
@@ -93,6 +94,7 @@ fn all_containers_running(
     !containers.is_empty() && containers.iter().all(|r| r)
 }
 
+#[allow(clippy::type_complexity)]
 fn all_containers_stopped(
     In(_entity): In<Entity>,
     containers: Query<(Has<Stopped>, Has<Failed>), (With<StartOrder>, Without<SystemEntity>)>,
@@ -164,42 +166,40 @@ fn on_pulling_image(
         total: 0,
     });
 
-    commands.entity(entity).spawn_task(move |cmd| async move {
+    commands.entity(entity).spawn_task(move |cmd| {
         let entity = cmd.entity();
-        let cmd_progress = cmd.clone();
-        let cmd_logs = cmd.clone();
-        let result = backend
-            .pull_image(
-                move |p| {
-                    cmd_progress.send(move |world: &mut World| {
-                        if let Some(mut dp) = world.get_mut::<DownloadProgress>(entity) {
-                            dp.downloaded = p.downloaded;
-                            dp.total = p.total;
-                        }
-                        world.tick();
-                    });
-                },
-                move |text| {
-                    cmd_logs.send(move |world: &mut World| {
-                        if let Some(mut log_buf) = world.get_mut::<LogBuffer>(entity) {
-                            log_buf.push(text);
-                        }
-                        world.tick();
-                    });
-                },
-            )
-            .await;
-        match result {
-            Ok(()) => cmd.send_state(Message::MarkDone { container_name }),
-            Err(e) => {
-                cmd.send(move |world: &mut World| {
-                    world
-                        .entity_mut(entity)
-                        .insert((EntityError(e), Done::Failure));
-                })
-                .wake();
+        let span = tracing::info_span!("container", entity_id = entity.to_bits());
+        async move {
+            let cmd_progress = cmd.clone();
+            let result = backend
+                .pull_image(
+                    move |p| {
+                        cmd_progress.send(move |world: &mut World| {
+                            if let Some(mut dp) = world.get_mut::<DownloadProgress>(entity) {
+                                dp.downloaded = p.downloaded;
+                                dp.total = p.total;
+                            }
+                            world.tick();
+                        });
+                    },
+                    |text| {
+                        tracing::info!("{text}");
+                    },
+                )
+                .await;
+            match result {
+                Ok(()) => cmd.send_state(Message::MarkDone { container_name }),
+                Err(e) => {
+                    cmd.send(move |world: &mut World| {
+                        world
+                            .entity_mut(entity)
+                            .insert((EntityError(e), Done::Failure));
+                    })
+                    .wake();
+                }
             }
         }
+        .instrument(span)
     });
 }
 
@@ -222,30 +222,28 @@ fn on_starting(
     let backend = backend.0.clone();
     let container_name = names.get(entity).map(|n| n.0.clone()).unwrap_or_default();
 
-    commands.entity(entity).spawn_task(move |cmd| async move {
+    commands.entity(entity).spawn_task(move |cmd| {
         let entity = cmd.entity();
-        let cmd_logs = cmd.clone();
-        let result = backend
-            .boot_container(move |text| {
-                cmd_logs.send(move |world: &mut World| {
-                    if let Some(mut log_buf) = world.get_mut::<LogBuffer>(entity) {
-                        log_buf.push(text);
-                    }
-                    world.tick();
-                });
-            })
-            .await;
-        match result {
-            Ok(()) => cmd.send_state(Message::MarkDone { container_name }),
-            Err(e) => {
-                cmd.send(move |world: &mut World| {
-                    world
-                        .entity_mut(entity)
-                        .insert((EntityError(e), Done::Failure));
+        let span = tracing::info_span!("container", entity_id = entity.to_bits());
+        async move {
+            let result = backend
+                .boot_container(|text| {
+                    tracing::info!("{text}");
                 })
-                .wake();
+                .await;
+            match result {
+                Ok(()) => cmd.send_state(Message::MarkDone { container_name }),
+                Err(e) => {
+                    cmd.send(move |world: &mut World| {
+                        world
+                            .entity_mut(entity)
+                            .insert((EntityError(e), Done::Failure));
+                    })
+                    .wake();
+                }
             }
         }
+        .instrument(span)
     });
 }
 
