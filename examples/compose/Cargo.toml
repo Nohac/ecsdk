@@ -24,3 +24,4 @@ interprocess = { workspace = true }
 crossterm = { workspace = true }
 clap = { workspace = true }
 rand = { workspace = true }
+anyhow = { workspace = true }

@@ -29,6 +29,12 @@ pub struct Stopping;
 #[derive(Component, Clone)]
 pub struct Stopped;
 
+#[derive(Component, Clone)]
+pub struct Failed;
+
+#[derive(Component)]
+pub struct EntityError(pub anyhow::Error);
+
 // ── State components (orchestrator) ──
 
 #[derive(Component, Clone)]
@@ -57,25 +63,23 @@ pub struct Backend(pub ContainerRuntime);
 
 // ── Triggers ──
 
+#[allow(clippy::type_complexity)]
 fn predecessors_ready(
     In(entity): In<Entity>,
     this: Query<&StartOrder>,
-    all: Query<(&StartOrder, Has<Running>, Has<Stopped>)>,
+    all: Query<(&StartOrder, Has<Running>, Has<Stopped>, Has<Failed>)>,
 ) -> bool {
     let Ok(order) = this.get(entity) else {
         return false;
     };
-    all.iter().all(|(other_order, is_running, is_stopped)| {
-        if other_order.0 < order.0 {
-            is_running || is_stopped
-        } else {
-            true
-        }
-    })
-}
-
-fn has_done(In(entity): In<Entity>, dones: Query<&Done>) -> bool {
-    dones.get(entity).is_ok()
+    all.iter()
+        .all(|(other_order, is_running, is_stopped, is_failed)| {
+            if other_order.0 < order.0 {
+                is_running || is_stopped || is_failed
+            } else {
+                true
+            }
+        })
 }
 
 fn shutdown_requested(In(_entity): In<Entity>, flag: Res<ShutdownRequested>) -> bool {
@@ -91,9 +95,9 @@ fn all_containers_running(
 
 fn all_containers_stopped(
     In(_entity): In<Entity>,
-    containers: Query<Has<Stopped>, (With<StartOrder>, Without<SystemEntity>)>,
+    containers: Query<(Has<Stopped>, Has<Failed>), (With<StartOrder>, Without<SystemEntity>)>,
 ) -> bool {
-    !containers.is_empty() && containers.iter().all(|s| s)
+    !containers.is_empty() && containers.iter().all(|(s, f)| s || f)
 }
 
 // ── State machine builders ──
@@ -104,11 +108,13 @@ pub fn build_container_sm() -> StateMachine {
         .on_enter::<PullingImage>(|e| {
             e.insert(ContainerPhase::PullingImage);
         })
-        .trans::<PullingImage, _>(has_done, Starting)
+        .trans::<PullingImage, _>(done(Some(Done::Success)), Starting)
+        .trans::<PullingImage, _>(done(Some(Done::Failure)), Failed)
         .on_enter::<Starting>(|e| {
             e.insert(ContainerPhase::Starting);
         })
-        .trans::<Starting, _>(has_done, Running)
+        .trans::<Starting, _>(done(Some(Done::Success)), Running)
+        .trans::<Starting, _>(done(Some(Done::Failure)), Failed)
         .on_enter::<Running>(|e| {
             e.insert(ContainerPhase::Running);
         })
@@ -119,9 +125,13 @@ pub fn build_container_sm() -> StateMachine {
         .on_enter::<Stopping>(|e| {
             e.insert(ContainerPhase::Stopping);
         })
-        .trans::<Stopping, _>(has_done, Stopped)
+        .trans::<Stopping, _>(done(Some(Done::Success)), Stopped)
+        .trans::<Stopping, _>(done(Some(Done::Failure)), Failed)
         .on_enter::<Stopped>(|e| {
             e.insert(ContainerPhase::Stopped);
+        })
+        .on_enter::<Failed>(|e| {
+            e.insert(ContainerPhase::Failed);
         })
         .set_trans_logging(true)
 }
@@ -158,15 +168,13 @@ fn on_pulling_image(
         let entity = cmd.entity();
         let cmd_progress = cmd.clone();
         let cmd_logs = cmd.clone();
-        let _ = backend
+        let result = backend
             .pull_image(
                 move |p| {
-                    let downloaded = p.downloaded;
-                    let total = p.total;
                     cmd_progress.send(move |world: &mut World| {
                         if let Some(mut dp) = world.get_mut::<DownloadProgress>(entity) {
-                            dp.downloaded = downloaded;
-                            dp.total = total;
+                            dp.downloaded = p.downloaded;
+                            dp.total = p.total;
                         }
                         world.tick();
                     });
@@ -181,7 +189,17 @@ fn on_pulling_image(
                 },
             )
             .await;
-        cmd.send_state(Message::MarkDone { container_name });
+        match result {
+            Ok(()) => cmd.send_state(Message::MarkDone { container_name }),
+            Err(e) => {
+                cmd.send(move |world: &mut World| {
+                    world
+                        .entity_mut(entity)
+                        .insert((EntityError(e), Done::Failure));
+                })
+                .wake();
+            }
+        }
     });
 }
 
@@ -207,7 +225,7 @@ fn on_starting(
     commands.entity(entity).spawn_task(move |cmd| async move {
         let entity = cmd.entity();
         let cmd_logs = cmd.clone();
-        let _ = backend
+        let result = backend
             .boot_container(move |text| {
                 cmd_logs.send(move |world: &mut World| {
                     if let Some(mut log_buf) = world.get_mut::<LogBuffer>(entity) {
@@ -217,7 +235,17 @@ fn on_starting(
                 });
             })
             .await;
-        cmd.send_state(Message::MarkDone { container_name });
+        match result {
+            Ok(()) => cmd.send_state(Message::MarkDone { container_name }),
+            Err(e) => {
+                cmd.send(move |world: &mut World| {
+                    world
+                        .entity_mut(entity)
+                        .insert((EntityError(e), Done::Failure));
+                })
+                .wake();
+            }
+        }
     });
 }
 
@@ -248,8 +276,18 @@ fn on_stopping(
     let container_name = names.get(entity).map(|n| n.0.clone()).unwrap_or_default();
 
     commands.entity(entity).spawn_task(move |cmd| async move {
-        let _ = backend.stop_container().await;
-        cmd.send_state(Message::MarkDone { container_name });
+        let entity = cmd.entity();
+        match backend.stop_container().await {
+            Ok(()) => cmd.send_state(Message::MarkDone { container_name }),
+            Err(e) => {
+                cmd.send(move |world: &mut World| {
+                    world
+                        .entity_mut(entity)
+                        .insert((EntityError(e), Done::Failure));
+                })
+                .wake();
+            }
+        }
     });
 }
 
@@ -257,6 +295,19 @@ fn on_stopped(trigger: On<Insert, Stopped>, mut logs: Query<&mut LogBuffer>) {
     let entity = trigger.event_target();
     if let Ok(mut log_buf) = logs.get_mut(entity) {
         log_buf.push("Container stopped");
+    }
+}
+
+fn on_failed(
+    trigger: On<Insert, Failed>,
+    mut logs: Query<&mut LogBuffer>,
+    errors: Query<&EntityError>,
+) {
+    let entity = trigger.event_target();
+    if let Ok(err) = errors.get(entity)
+        && let Ok(mut log_buf) = logs.get_mut(entity)
+    {
+        log_buf.push(format!("Error: {:#}", err.0));
     }
 }
 
@@ -324,6 +375,7 @@ impl Plugin for LifecyclePlugin {
         app.add_observer(on_running);
         app.add_observer(on_stopping);
         app.add_observer(on_stopped);
+        app.add_observer(on_failed);
 
         // Orchestrator observers
         app.add_observer(on_all_running);
@@ -463,5 +515,50 @@ mod tests {
         app.update(); // orchestrator sees all Running → AllRunning
 
         assert!(app.world().get::<AllRunning>(_orch).is_some());
+    }
+
+    #[test]
+    fn shutdown_completes_when_one_container_failed() {
+        let mut app = test_app();
+        let c1 = spawn_container(&mut app, 0, Pending);
+        let c2 = spawn_container(&mut app, 0, Pending);
+        let orch = app
+            .world_mut()
+            .spawn((Deploying, build_orchestrator_sm()))
+            .id();
+
+        app.update(); // both Pending → PullingImage
+
+        // c1 succeeds through to Running, c2 fails during pull
+        app.world_mut().entity_mut(c1).insert(Done::Success);
+        app.world_mut().entity_mut(c2).insert(Done::Failure);
+        app.update(); // c1: PullingImage → Starting, c2: PullingImage → Failed
+
+        assert!(app.world().get::<Starting>(c1).is_some());
+        assert!(app.world().get::<Failed>(c2).is_some());
+        assert_eq!(
+            app.world().get::<ContainerPhase>(c2),
+            Some(&ContainerPhase::Failed),
+        );
+
+        app.world_mut().entity_mut(c1).insert(Done::Success);
+        app.update(); // c1: Starting → Running
+
+        // Request shutdown
+        app.world_mut().resource_mut::<ShutdownRequested>().0 = true;
+        app.update(); // c1: Running → Stopping, c2 stays Failed, orch → ShuttingDown
+
+        assert!(app.world().get::<Stopping>(c1).is_some());
+        assert!(app.world().get::<Failed>(c2).is_some());
+        assert!(app.world().get::<ShuttingDown>(orch).is_some());
+
+        app.world_mut().entity_mut(c1).insert(Done::Success);
+        app.update(); // c1: Stopping → Stopped
+
+        app.update(); // orchestrator sees all stopped/failed → AllStopped
+
+        assert!(app.world().get::<Stopped>(c1).is_some());
+        assert!(app.world().get::<Failed>(c2).is_some());
+        assert!(app.world().get::<AllStopped>(orch).is_some());
     }
 }

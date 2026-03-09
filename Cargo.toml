@@ -32,3 +32,4 @@ seldom_state = { git = "https://github.com/Wiwip/seldom_state.git", rev = "cc6c8
 interprocess = { version = "2.4", features = ["tokio"] }
 clap = { version = "4", features = ["derive"] }
 rand = "0.9"
+anyhow = "1"

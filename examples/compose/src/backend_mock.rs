@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use anyhow::bail;
 use rand::Rng;
 
 use crate::backend::{ContainerBackend, PullProgress};
@@ -24,7 +25,7 @@ impl ContainerBackend for MockBackend {
         &self,
         on_progress: impl Fn(PullProgress) + Send,
         on_log: impl Fn(String) + Send,
-    ) -> Result<(), String> {
+    ) -> anyhow::Result<()> {
         on_log(format!("Pulling {}...", self.image));
 
         // Pre-generate delays (ThreadRng is !Send)
@@ -44,7 +45,7 @@ impl ContainerBackend for MockBackend {
         Ok(())
     }
 
-    async fn boot_container(&self, on_log: impl Fn(String) + Send) -> Result<(), String> {
+    async fn boot_container(&self, on_log: impl Fn(String) + Send) -> anyhow::Result<()> {
         let boot_lines: Vec<(&str, u64)> = match self.name.as_str() {
             "postgres" => vec![
                 ("PostgreSQL init process complete", 200),
@@ -56,7 +57,6 @@ impl ContainerBackend for MockBackend {
             ],
             "api-server" => vec![
                 ("Connecting to database...", 300),
-                ("Server listening on :8080", 400),
             ],
             "web-frontend" => vec![
                 ("Compiling assets...", 400),
@@ -70,12 +70,18 @@ impl ContainerBackend for MockBackend {
             on_log(text.to_string());
         }
 
+        if self.name == "api-server" {
+            let delay = { rand::rng().random_range(200..=500u64) };
+            tokio::time::sleep(Duration::from_millis(delay)).await;
+            bail!("connection refused: postgres:5432");
+        }
+
         let startup_delay = { rand::rng().random_range(500..=1500u64) };
         tokio::time::sleep(Duration::from_millis(startup_delay)).await;
         Ok(())
     }
 
-    async fn stop_container(&self) -> Result<(), String> {
+    async fn stop_container(&self) -> anyhow::Result<()> {
         let delay = { rand::rng().random_range(200..=800u64) };
         tokio::time::sleep(Duration::from_millis(delay)).await;
         Ok(())

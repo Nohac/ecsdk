@@ -12,13 +12,13 @@ pub trait ContainerBackend {
         &self,
         on_progress: impl Fn(PullProgress) + Send,
         on_log: impl Fn(String) + Send,
-    ) -> Result<(), String>;
+    ) -> anyhow::Result<()>;
 
     /// Boot a container. Calls `on_log` with log lines as it starts up.
-    async fn boot_container(&self, on_log: impl Fn(String) + Send) -> Result<(), String>;
+    async fn boot_container(&self, on_log: impl Fn(String) + Send) -> anyhow::Result<()>;
 
     /// Stop a container.
-    async fn stop_container(&self) -> Result<(), String>;
+    async fn stop_container(&self) -> anyhow::Result<()>;
 }
 
 pub type ContainerRuntime = MockBackend;
