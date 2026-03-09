@@ -2,12 +2,9 @@ use bevy::app::prelude::*;
 use bevy::ecs::prelude::*;
 use bevy_replicon::prelude::*;
 use ecsdk_core::AppExit;
-use ecsdk_replicon::{
-    AcceptClientCmd, InsertClientBridgeCmd, RemoveClientBridgeCmd, RepliconPacket, run_bridge,
-};
+use ecsdk_replicon::{AcceptClientCmd, ConnectClientCmd};
 use ecsdk_tasks::SpawnCmdTask;
 use interprocess::local_socket::traits::tokio::Listener as _;
-use tokio::sync::mpsc;
 
 use crate::container::*;
 use crate::protocol::{LogEvent, ServerExitNotice, ShutdownRequest};
@@ -69,40 +66,20 @@ pub fn spawn_client_connection(mut commands: Commands) {
     commands
         .spawn_empty()
         .spawn_cmd_task(move |cmd| async move {
-            let stream = match crate::ipc::connect().await {
-                Ok(s) => s,
+            match crate::ipc::connect().await {
+                Ok(stream) => {
+                    cmd.send(move |world: &mut World| {
+                        ConnectClientCmd { stream }.apply(world);
+                    })
+                    .wake();
+                }
                 Err(e) => {
                     eprintln!("Failed to connect to daemon: {e}");
                     cmd.send(|world: &mut World| {
                         world.resource_mut::<AppExit>().0 = true;
                     })
                     .wake();
-                    return;
                 }
-            };
-
-            let (to_server_tx, mut to_server_rx) = mpsc::unbounded_channel::<RepliconPacket>();
-            let (from_server_tx, from_server_rx) = mpsc::unbounded_channel::<RepliconPacket>();
-
-            cmd.send(move |world: &mut World| {
-                InsertClientBridgeCmd {
-                    from_server_rx,
-                    to_server_tx,
-                }
-                .apply(world);
-            })
-            .wake();
-
-            let wake = cmd.clone();
-            run_bridge(stream, &mut to_server_rx, &from_server_tx, move || {
-                wake.wake();
-            })
-            .await;
-
-            cmd.send(|world: &mut World| {
-                RemoveClientBridgeCmd.apply(world);
-                world.resource_mut::<AppExit>().0 = true;
-            })
-            .wake();
+            }
         });
 }

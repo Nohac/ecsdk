@@ -5,6 +5,7 @@ members = [
     "crates/ecsdk_tasks",
     "crates/ecsdk_term",
     "crates/ecsdk_replicon",
+    "crates/ecsdk_replicon_transport",
     "examples/compose",
 ]
 resolver = "3"
@@ -16,6 +17,7 @@ ecsdk_app = { path = "crates/ecsdk_app" }
 ecsdk_tasks = { path = "crates/ecsdk_tasks" }
 ecsdk_term = { path = "crates/ecsdk_term" }
 ecsdk_replicon = { path = "crates/ecsdk_replicon" }
+ecsdk_replicon_transport = { path = "crates/ecsdk_replicon_transport" }
 
 # External
 bevy = { version = "0.18", default-features = false, features = ["multi_threaded"] }

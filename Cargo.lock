@@ -1767,7 +1767,15 @@ dependencies = [
  "bevy",
  "bevy_replicon",
  "ecsdk_core",
+ "ecsdk_replicon_transport",
  "ecsdk_tasks",
+ "tokio",
+]
+
+[[package]]
+name = "ecsdk_replicon_transport"
+version = "0.1.0"
+dependencies = [
  "futures-util",
  "tokio",
  "tokio-util",
