@@ -8,6 +8,7 @@
       "Bash(cargo clippy:*)",
       "Bash(cargo fmt:*)",
       "Bash(cargo doc:*)",
+      "Bash(cargo info:*)",
       "Bash(cargo add:*)",
       "Bash(cargo fetch:*)",
       "Bash(cargo search:*)",
@@ -20,6 +21,7 @@
       "Bash(wc:*)",
       "Bash(timeout:*)",
       "Bash(bash:*)",
+      "Bash(grep:*)",
 
       "WebFetch(domain:github.com)",
       "WebFetch(domain:raw.githubusercontent.com)",
