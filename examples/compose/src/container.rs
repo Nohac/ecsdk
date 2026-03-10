@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::time::Instant;
 
 use bevy::ecs::prelude::*;
+use ecsdk_macros::StateComponent;
 use serde::{Deserialize, Serialize};
 
 #[derive(Component, Serialize, Deserialize)]
@@ -14,7 +15,7 @@ pub struct ImageRef(pub String);
 #[derive(Component, Serialize, Deserialize)]
 pub struct StartOrder(pub u32);
 
-#[derive(Component, PartialEq, Eq, Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Component, StateComponent, PartialEq, Eq, Clone, Copy, Debug, Serialize, Deserialize)]
 pub enum ContainerPhase {
     Pending,
     PullingImage,
@@ -37,6 +38,14 @@ impl ContainerPhase {
             Self::Failed => "Failed",
         }
     }
+}
+
+#[derive(Component, StateComponent, PartialEq, Eq, Clone, Copy, Debug, Serialize, Deserialize)]
+pub enum OrchestratorPhase {
+    Deploying,
+    AllRunning,
+    ShuttingDown,
+    AllStopped,
 }
 
 #[derive(Component, Serialize, Deserialize)]

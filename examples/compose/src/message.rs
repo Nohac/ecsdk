@@ -3,7 +3,8 @@ use ecsdk_core::ApplyMessage;
 use serde::{Deserialize, Serialize};
 
 use crate::container::*;
-use crate::lifecycle::{Pending, ShutdownRequested, build_container_sm};
+use crate::container::container_phase::Pending;
+use crate::lifecycle::{ShutdownRequested, build_container_sm};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum Message {
@@ -30,7 +31,6 @@ impl ApplyMessage for Message {
                     ContainerName(name.clone()),
                     ImageRef(image.clone()),
                     StartOrder(*start_order),
-                    ContainerPhase::Pending,
                     Pending,
                     build_container_sm(),
                     LogBuffer::default(),

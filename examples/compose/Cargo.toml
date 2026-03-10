@@ -9,6 +9,7 @@ path = "src/main.rs"
 
 [dependencies]
 ecsdk_core = { workspace = true }
+ecsdk_macros = { workspace = true }
 ecsdk_app = { workspace = true }
 ecsdk_tasks = { workspace = true }
 ecsdk_term = { workspace = true }

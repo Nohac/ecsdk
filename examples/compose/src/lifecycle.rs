@@ -8,47 +8,14 @@ use tracing::Instrument;
 use crate::backend::ContainerBackend;
 use crate::backend::ContainerRuntime;
 use crate::container::*;
+use crate::container::container_phase::{
+    Failed, Pending, PullingImage, Running, Starting, Stopped, Stopping,
+};
+use crate::container::orchestrator_phase::{AllRunning, AllStopped, Deploying, ShuttingDown};
 use crate::message::Message;
-
-// ── State components (container lifecycle) ──
-
-#[derive(Component, Clone)]
-pub struct Pending;
-
-#[derive(Component, Clone)]
-pub struct PullingImage;
-
-#[derive(Component, Clone)]
-pub struct Starting;
-
-#[derive(Component, Clone)]
-pub struct Running;
-
-#[derive(Component, Clone)]
-pub struct Stopping;
-
-#[derive(Component, Clone)]
-pub struct Stopped;
-
-#[derive(Component, Clone)]
-pub struct Failed;
 
 #[derive(Component)]
 pub struct EntityError(pub anyhow::Error);
-
-// ── State components (orchestrator) ──
-
-#[derive(Component, Clone)]
-pub struct Deploying;
-
-#[derive(Component, Clone)]
-pub struct AllRunning;
-
-#[derive(Component, Clone)]
-pub struct ShuttingDown;
-
-#[derive(Component, Clone)]
-pub struct AllStopped;
 
 // ── Events and resources ──
 
@@ -107,34 +74,16 @@ fn all_containers_stopped(
 pub fn build_container_sm() -> StateMachine {
     StateMachine::default()
         .trans::<Pending, _>(predecessors_ready, PullingImage)
-        .on_enter::<PullingImage>(|e| {
-            e.insert(ContainerPhase::PullingImage);
-        })
         .trans::<PullingImage, _>(done(Some(Done::Success)), Starting)
         .trans::<PullingImage, _>(done(Some(Done::Failure)), Failed)
-        .on_enter::<Starting>(|e| {
-            e.insert(ContainerPhase::Starting);
-        })
         .trans::<Starting, _>(done(Some(Done::Success)), Running)
         .trans::<Starting, _>(done(Some(Done::Failure)), Failed)
-        .on_enter::<Running>(|e| {
-            e.insert(ContainerPhase::Running);
-        })
         .trans::<OneOfState<(Pending, PullingImage, Starting, Running)>, _>(
             shutdown_requested,
             Stopping,
         )
-        .on_enter::<Stopping>(|e| {
-            e.insert(ContainerPhase::Stopping);
-        })
         .trans::<Stopping, _>(done(Some(Done::Success)), Stopped)
         .trans::<Stopping, _>(done(Some(Done::Failure)), Failed)
-        .on_enter::<Stopped>(|e| {
-            e.insert(ContainerPhase::Stopped);
-        })
-        .on_enter::<Failed>(|e| {
-            e.insert(ContainerPhase::Failed);
-        })
         .set_trans_logging(true)
 }
 
@@ -387,7 +336,11 @@ impl Plugin for LifecyclePlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::container::{ContainerName, ContainerPhase, StartOrder};
+    use crate::container::container_phase::{
+        Failed, Pending, PullingImage, Running, Starting, Stopped, Stopping,
+    };
+    use crate::container::orchestrator_phase::{AllRunning, AllStopped, Deploying, ShuttingDown};
+    use crate::container::{ContainerName, ContainerPhase, OrchestratorPhase, StartOrder};
 
     fn test_app() -> App {
         let mut app = App::new();
@@ -400,7 +353,6 @@ mod tests {
             .spawn((
                 ContainerName(format!("test-{order}")),
                 StartOrder(order),
-                ContainerPhase::Pending,
                 state,
                 build_container_sm(),
                 LogBuffer::default(),
@@ -496,7 +448,11 @@ mod tests {
         let c2 = spawn_container(&mut app, 0, Pending);
         let _orch = app
             .world_mut()
-            .spawn((Deploying, build_orchestrator_sm()))
+            .spawn((
+                OrchestratorPhase::Deploying,
+                Deploying,
+                build_orchestrator_sm(),
+            ))
             .id();
 
         app.update(); // both Pending → PullingImage
@@ -513,6 +469,10 @@ mod tests {
         app.update(); // orchestrator sees all Running → AllRunning
 
         assert!(app.world().get::<AllRunning>(_orch).is_some());
+        assert_eq!(
+            app.world().get::<OrchestratorPhase>(_orch),
+            Some(&OrchestratorPhase::AllRunning)
+        );
     }
 
     #[test]
@@ -522,7 +482,11 @@ mod tests {
         let c2 = spawn_container(&mut app, 0, Pending);
         let orch = app
             .world_mut()
-            .spawn((Deploying, build_orchestrator_sm()))
+            .spawn((
+                OrchestratorPhase::Deploying,
+                Deploying,
+                build_orchestrator_sm(),
+            ))
             .id();
 
         app.update(); // both Pending → PullingImage
@@ -549,6 +513,10 @@ mod tests {
         assert!(app.world().get::<Stopping>(c1).is_some());
         assert!(app.world().get::<Failed>(c2).is_some());
         assert!(app.world().get::<ShuttingDown>(orch).is_some());
+        assert_eq!(
+            app.world().get::<OrchestratorPhase>(orch),
+            Some(&OrchestratorPhase::ShuttingDown)
+        );
 
         app.world_mut().entity_mut(c1).insert(Done::Success);
         app.update(); // c1: Stopping → Stopped
@@ -558,5 +526,9 @@ mod tests {
         assert!(app.world().get::<Stopped>(c1).is_some());
         assert!(app.world().get::<Failed>(c2).is_some());
         assert!(app.world().get::<AllStopped>(orch).is_some());
+        assert_eq!(
+            app.world().get::<OrchestratorPhase>(orch),
+            Some(&OrchestratorPhase::AllStopped)
+        );
     }
 }

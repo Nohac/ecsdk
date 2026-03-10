@@ -1389,6 +1389,7 @@ dependencies = [
  "crossterm",
  "ecsdk_app",
  "ecsdk_core",
+ "ecsdk_macros",
  "ecsdk_replicon",
  "ecsdk_tasks",
  "ecsdk_term",
@@ -1762,6 +1763,16 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "tokio",
+]
+
+[[package]]
+name = "ecsdk_macros"
+version = "0.1.0"
+dependencies = [
+ "heck",
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
