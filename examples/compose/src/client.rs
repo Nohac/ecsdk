@@ -4,10 +4,10 @@ use bevy::state::prelude::*;
 use bevy_replicon::prelude::*;
 use crossterm::event::{Event, KeyCode, KeyModifiers};
 use ecsdk_core::{AppExit, WakeSignal};
+use ecsdk_term::TerminalEvent;
 use tracing_subscriber::Layer as _;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-use ecsdk_term::TerminalEvent;
 
 use crate::container::*;
 use crate::message::Message;
@@ -108,12 +108,11 @@ pub async fn run_client(mode: RenderMode) {
     let (tracing_layer, tracing_receiver) = ecsdk_tracing::setup(wake);
     tracing_subscriber::registry()
         .with(tracing_layer.with_filter(
-            tracing_subscriber::filter::Targets::new()
-                .with_target("compose", tracing::Level::INFO),
+            tracing_subscriber::filter::Targets::new().with_target("compose", tracing::Level::INFO),
         ))
         .init();
     app.add_plugins(ecsdk_tracing::TracingPlugin::new(tracing_receiver));
 
     app.add_plugins(ClientPlugin(mode));
-    ecsdk_app::run_async(app, rx).await;
+    ecsdk_app::run_async(&mut app, rx).await;
 }

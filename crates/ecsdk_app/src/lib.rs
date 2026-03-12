@@ -45,7 +45,7 @@ pub fn setup<M: ApplyMessage>() -> (App, Receivers<M>) {
     )
 }
 
-pub async fn run_async<M: ApplyMessage>(mut app: App, mut rx: Receivers<M>) {
+pub async fn run_async<M: ApplyMessage>(app: &mut App, mut rx: Receivers<M>) {
     let mut tick_interval = interval(Duration::from_millis(1000 / 5));
     let mut needs_tick = false;
 

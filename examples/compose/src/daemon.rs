@@ -115,8 +115,7 @@ pub async fn run_daemon() {
     let (tracing_layer, tracing_receiver) = ecsdk_tracing::setup(wake);
     tracing_subscriber::registry()
         .with(tracing_layer.with_filter(
-            tracing_subscriber::filter::Targets::new()
-                .with_target("compose", tracing::Level::INFO),
+            tracing_subscriber::filter::Targets::new().with_target("compose", tracing::Level::INFO),
         ))
         .init();
     app.add_plugins(ecsdk_tracing::TracingPlugin::new(tracing_receiver));
@@ -145,7 +144,7 @@ pub async fn run_daemon() {
     // Backend factory — attach backends to containers spawned by state events
     app.add_observer(attach_mock_backend);
 
-    ecsdk_app::run_async(app, rx).await;
+    ecsdk_app::run_async(&mut app, rx).await;
 
     let _ = std::fs::remove_file(crate::ipc::SOCKET_PATH);
     tracing::info!("Daemon shut down");
