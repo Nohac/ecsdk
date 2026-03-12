@@ -3,7 +3,6 @@ use ecsdk_core::ApplyMessage;
 use serde::{Deserialize, Serialize};
 
 use crate::container::*;
-use crate::container::container_phase::Pending;
 use crate::lifecycle::{ShutdownRequested, build_container_sm};
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -27,14 +26,14 @@ impl ApplyMessage for Message {
                 image,
                 start_order,
             } => {
-                world.spawn((
+                let mut entity = world.spawn((
                     ContainerName(name.clone()),
                     ImageRef(image.clone()),
                     StartOrder(*start_order),
-                    Pending,
                     build_container_sm(),
                     LogBuffer::default(),
                 ));
+                ContainerPhase::Pending.insert_marker_world(&mut entity);
             }
             Self::MarkDone { container_name } => {
                 let entity = world

@@ -12,7 +12,6 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 use crate::backend_mock::MockBackend;
 use crate::container::*;
-use crate::container::orchestrator_phase::Deploying;
 use crate::lifecycle::*;
 use crate::message::Message;
 use crate::replicon::{SharedReplicationPlugin, spawn_server_listener};
@@ -133,8 +132,8 @@ pub async fn run_daemon() {
         });
     }
 
-    app.world_mut()
-        .spawn((OrchestratorPhase::Deploying, Deploying, build_orchestrator_sm()));
+    let mut orchestrator = app.world_mut().spawn((build_orchestrator_sm(),));
+    OrchestratorPhase::Deploying.insert_marker_world(&mut orchestrator);
 
     app.world_mut().spawn((
         ContainerName("[system]".into()),

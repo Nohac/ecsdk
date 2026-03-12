@@ -58,7 +58,47 @@ fn expand_state_component(input: &DeriveInput) -> syn::Result<proc_macro2::Token
         })
         .collect::<syn::Result<Vec<_>>>()?;
 
+    let entity_commands_arms = data_enum
+        .variants
+        .iter()
+        .map(|variant| {
+            let variant_ident = &variant.ident;
+            quote! {
+                Self::#variant_ident => {
+                    entity.insert(#module_ident::#variant_ident);
+                }
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let entity_world_mut_arms = data_enum
+        .variants
+        .iter()
+        .map(|variant| {
+            let variant_ident = &variant.ident;
+            quote! {
+                Self::#variant_ident => {
+                    entity.insert(#module_ident::#variant_ident);
+                }
+            }
+        })
+        .collect::<Vec<_>>();
+
     Ok(quote! {
+        impl #enum_ident {
+            pub fn insert_marker(self, entity: &mut bevy::ecs::system::EntityCommands<'_>) {
+                match self {
+                    #(#entity_commands_arms)*
+                }
+            }
+
+            pub fn insert_marker_world(self, entity: &mut bevy::ecs::world::EntityWorldMut<'_>) {
+                match self {
+                    #(#entity_world_mut_arms)*
+                }
+            }
+        }
+
         #vis mod #module_ident {
             use bevy::ecs::prelude::*;
             use bevy::ecs::{lifecycle::HookContext, world::DeferredWorld};
