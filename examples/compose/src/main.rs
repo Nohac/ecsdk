@@ -8,6 +8,7 @@ mod lifecycle;
 mod message;
 mod protocol;
 mod render;
+#[cfg(test)]
 mod replay;
 mod replicon;
 

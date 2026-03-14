@@ -20,7 +20,8 @@ impl Plugin for SharedReplicationPlugin {
         app.replicate::<ContainerName>();
         app.replicate::<ImageRef>();
         app.replicate::<StartOrder>();
-        app.replicate::<ContainerPhase>();
+        ContainerPhase::replicate_markers(app);
+        OrchestratorPhase::replicate_markers(app);
         app.replicate::<DownloadProgress>();
         app.replicate::<SystemEntity>();
 

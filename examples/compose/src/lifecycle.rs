@@ -296,8 +296,10 @@ fn handle_shutdown_all(_trigger: On<ShutdownAll>, state_queue: Res<MessageQueue<
 
 /// Registers state machine infrastructure and resources without observers.
 /// Use for pure state machine tests that don't need async tasks or CmdQueue.
+#[cfg(test)]
 pub struct LifecycleTestPlugin;
 
+#[cfg(test)]
 impl Plugin for LifecycleTestPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(StateMachinePlugin::default().schedule(PreUpdate));
