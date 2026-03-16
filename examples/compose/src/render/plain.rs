@@ -27,9 +27,17 @@ pub(super) fn render_plain(
 ) {
     let total = total_count.iter().count();
 
-    // Collect and sort by StartOrder for consistent display
+    // Collect and sort deterministically so equal-priority containers
+    // don't swap positions between frames.
     let mut containers: Vec<_> = query.iter().collect();
-    containers.sort_by_key(|(_, _, order, _, _, _)| order.0);
+    containers.sort_by(|a, b| {
+        let (_, name_a, order_a, _, _, _) = a;
+        let (_, name_b, order_b, _, _, _) = b;
+        order_a
+            .0
+            .cmp(&order_b.0)
+            .then_with(|| name_a.0.cmp(&name_b.0))
+    });
 
     for (idx, (entity, name, _order, phase, progress, log_buf)) in containers.iter().enumerate() {
         let display_idx = idx + 1;
@@ -40,10 +48,15 @@ pub(super) fn render_plain(
         let phase_changed = state.last_phase.get(&entity) != Some(&phase);
 
         // Check for progress update
-        let progress_changed = if let Some(prog) = progress {
-            let last = state.last_progress.get(&entity).copied().unwrap_or(0);
-            prog.downloaded != last
+        let progress_changed = if phase == ContainerPhase::PullingImage {
+            if let Some(prog) = progress {
+                let last = state.last_progress.get(&entity).copied().unwrap_or(0);
+                prog.downloaded != last
+            } else {
+                false
+            }
         } else {
+            state.last_progress.remove(&entity);
             false
         };
 

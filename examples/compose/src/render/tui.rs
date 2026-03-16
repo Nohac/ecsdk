@@ -259,7 +259,11 @@ pub(super) fn render_tui(
             )
         })
         .collect();
-    containers.sort_by_key(|(order, _)| *order);
+    containers.sort_by(|(order_a, container_a), (order_b, container_b)| {
+        order_a
+            .cmp(order_b)
+            .then_with(|| container_a.name.cmp(&container_b.name))
+    });
     let containers: Vec<_> = containers.into_iter().map(|(_, c)| c).collect();
 
     // Layout: header | separator (1 row) | logs
