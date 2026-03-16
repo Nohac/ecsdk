@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::time::SystemTime;
 
 use bevy::app::prelude::*;
 use bevy::ecs::prelude::*;
@@ -15,11 +14,9 @@ use crate::backend_mock::MockBackend;
 use crate::container::*;
 use crate::lifecycle::*;
 use crate::message::Message;
+use crate::role::{AppRole, AppRoleExt};
 use crate::replicon::{SharedReplicationPlugin, spawn_server_listener};
-
-// ---------------------------------------------------------------------------
-// Daemon-specific ECS systems and observers
-// ---------------------------------------------------------------------------
+use crate::status::StatusFeature;
 
 fn send_log_events(
     mut commands: Commands,
@@ -58,43 +55,6 @@ fn handle_shutdown_request(
     commands.trigger(ShutdownAll);
 }
 
-fn handle_status_request(
-    _trigger: On<FromClient<crate::protocol::StatusRequest>>,
-    mut commands: Commands,
-) {
-    commands.server_trigger(ToClients {
-        mode: SendMode::Broadcast,
-        message: crate::protocol::StatusResponse {
-            time: SystemTime::now(),
-            note: "hello from server".into(),
-        },
-    });
-}
-
-fn sync_connection_markers(
-    clients: Query<Entity, With<ConnectedClient>>,
-    system_entity: Single<Entity, With<SystemEntity>>,
-    connected: Query<(), With<Connected>>,
-    initial: Query<(), With<InitialConnection>>,
-    mut commands: Commands,
-) {
-    let system = *system_entity;
-    let has_clients = !clients.is_empty();
-    let is_connected = connected.get(system).is_ok();
-    let has_initial = initial.get(system).is_ok();
-
-    if has_clients {
-        if !has_initial {
-            commands.entity(system).insert(InitialConnection);
-        }
-        if !is_connected {
-            commands.entity(system).insert(Connected);
-        }
-    } else if is_connected {
-        commands.entity(system).remove::<Connected>();
-    }
-}
-
 // ---------------------------------------------------------------------------
 // DaemonPlugin — bundles all server-side registration
 // ---------------------------------------------------------------------------
@@ -111,6 +71,7 @@ impl Plugin for DaemonPlugin {
         app.add_plugins(RepliconPlugins.build().set(ServerPlugin::new(PostUpdate)));
         app.add_plugins(SharedReplicationPlugin);
         app.add_plugins(ecsdk_replicon::ServerTransportPlugin);
+        app.add_role_plugin(AppRole::Server, StatusFeature);
         app.add_systems(Startup, spawn_server_listener);
 
         // Lifecycle + log/exit broadcast
@@ -120,9 +81,8 @@ impl Plugin for DaemonPlugin {
             crate::container::drain_tracing_logs
                 .run_if(resource_exists::<ecsdk_tracing::TracingReceiver>),
         );
-        app.add_systems(Update, (sync_connection_markers, send_log_events, send_exit_notice));
+        app.add_systems(Update, (send_log_events, send_exit_notice));
         app.add_observer(handle_shutdown_request);
-        app.add_observer(handle_status_request);
 
         // Ctrl+C triggers graceful shutdown
         app.add_systems(Startup, spawn_ctrl_c_handler);
@@ -140,7 +100,7 @@ fn spawn_ctrl_c_handler(mut commands: Commands) {
 // Entry point
 // ---------------------------------------------------------------------------
 
-pub async fn run_daemon() {
+pub fn build_server_app() -> (App, ecsdk_app::Receivers<Message>) {
     let containers = [
         ("postgres", "postgres:16", 0),
         ("redis", "redis:7", 0),
@@ -183,6 +143,11 @@ pub async fn run_daemon() {
     // Backend factory — attach backends to containers spawned by state events
     app.add_observer(attach_mock_backend);
 
+    (app, rx)
+}
+
+pub async fn run_daemon() {
+    let (mut app, rx) = build_server_app();
     ecsdk_app::run_async(&mut app, rx).await;
 
     let _ = std::fs::remove_file(crate::ipc::SOCKET_PATH);

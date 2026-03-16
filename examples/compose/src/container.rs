@@ -78,12 +78,6 @@ impl LogBuffer {
 #[derive(Component, Serialize, Deserialize)]
 pub struct SystemEntity;
 
-#[derive(Component, Serialize, Deserialize)]
-pub struct InitialConnection;
-
-#[derive(Component, Serialize, Deserialize)]
-pub struct Connected;
-
 /// A single merged log entry with its source entity and name.
 pub struct MergedLogEntry {
     pub entity: Entity,

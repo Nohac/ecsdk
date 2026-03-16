@@ -9,4 +9,5 @@ ecsdk_tasks = { workspace = true }
 ecsdk_replicon_transport = { workspace = true }
 bevy = { workspace = true, features = ["bevy_state"] }
 bevy_replicon = { workspace = true }
+serde = { workspace = true }
 tokio = { workspace = true, features = ["rt", "sync"] }

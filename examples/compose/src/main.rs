@@ -11,6 +11,8 @@ mod render;
 #[cfg(test)]
 mod replay;
 mod replicon;
+mod role;
+mod status;
 
 use std::io::IsTerminal;
 use std::time::Duration;

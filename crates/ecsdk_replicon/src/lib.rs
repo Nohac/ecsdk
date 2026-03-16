@@ -5,10 +5,20 @@ use bevy::ecs::prelude::*;
 use bevy::state::prelude::*;
 use bevy_replicon::prelude::*;
 use ecsdk_tasks::SpawnCmdTask;
+use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc;
 
 pub use ecsdk_replicon_transport::{RepliconPacket, run_bridge};
+
+#[derive(Component, Serialize, Deserialize)]
+pub struct ConnectionStateEntity;
+
+#[derive(Component, Serialize, Deserialize)]
+pub struct InitialConnection;
+
+#[derive(Component, Serialize, Deserialize)]
+pub struct Connected;
 
 // ---------------------------------------------------------------------------
 // Server transport plugin
@@ -29,6 +39,10 @@ pub struct ServerTransportPlugin;
 impl Plugin for ServerTransportPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ServerBridge>();
+        app.replicate::<ConnectionStateEntity>();
+        app.replicate::<InitialConnection>();
+        app.replicate::<Connected>();
+        app.add_systems(Startup, spawn_connection_state_entity);
         app.add_systems(
             PreUpdate,
             (server_manage_state, server_receive_packets)
@@ -36,10 +50,18 @@ impl Plugin for ServerTransportPlugin {
                 .in_set(ServerSystems::ReceivePackets),
         );
         app.add_systems(
+            Update,
+            sync_connection_markers,
+        );
+        app.add_systems(
             PostUpdate,
             server_send_packets.in_set(ServerSystems::SendPackets),
         );
     }
+}
+
+fn spawn_connection_state_entity(mut commands: Commands) {
+    commands.spawn((ConnectionStateEntity, Replicated));
 }
 
 // ── Transport command structs ──
@@ -197,6 +219,30 @@ fn server_send_packets(mut messages: ResMut<ServerMessages>, bridge: Res<ServerB
     }
 }
 
+fn sync_connection_markers(
+    clients: Query<Entity, With<ConnectedClient>>,
+    connection_state: Single<Entity, With<ConnectionStateEntity>>,
+    connected: Query<(), With<Connected>>,
+    initial: Query<(), With<InitialConnection>>,
+    mut commands: Commands,
+) {
+    let entity = *connection_state;
+    let has_clients = !clients.is_empty();
+    let is_connected = connected.get(entity).is_ok();
+    let has_initial = initial.get(entity).is_ok();
+
+    if has_clients {
+        if !has_initial {
+            commands.entity(entity).insert(InitialConnection);
+        }
+        if !is_connected {
+            commands.entity(entity).insert(Connected);
+        }
+    } else if is_connected {
+        commands.entity(entity).remove::<Connected>();
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Client transport plugin
 // ---------------------------------------------------------------------------
@@ -211,6 +257,9 @@ pub struct ClientTransportPlugin;
 
 impl Plugin for ClientTransportPlugin {
     fn build(&self, app: &mut App) {
+        app.replicate::<ConnectionStateEntity>();
+        app.replicate::<InitialConnection>();
+        app.replicate::<Connected>();
         app.add_systems(
             PreUpdate,
             (client_manage_state, client_receive_packets)

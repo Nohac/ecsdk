@@ -1784,6 +1784,7 @@ dependencies = [
  "ecsdk_core",
  "ecsdk_replicon_transport",
  "ecsdk_tasks",
+ "serde",
  "tokio",
 ]
 

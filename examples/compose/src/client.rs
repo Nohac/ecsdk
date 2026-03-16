@@ -11,9 +11,11 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 use crate::container::*;
 use crate::message::Message;
-use crate::protocol::{LogEvent, ServerExitNotice, ShutdownRequest, StatusRequest};
+use crate::protocol::{LogEvent, ServerExitNotice, ShutdownRequest};
 use crate::render::{CrosstermPlugin, RenderMode};
+use crate::role::{AppRole, AppRoleExt};
 use crate::replicon::{SharedReplicationPlugin, spawn_client_connection};
+use crate::status::StatusFeature;
 
 // ---------------------------------------------------------------------------
 // Client-specific observers and systems
@@ -73,6 +75,7 @@ impl Plugin for ClientPlugin {
         app.add_plugins(RepliconPlugins);
         app.add_plugins(SharedReplicationPlugin);
         app.add_plugins(ecsdk_replicon::ClientTransportPlugin);
+        app.add_shared_role_plugin(StatusFeature);
         app.add_systems(Startup, spawn_client_connection);
 
         // Tracing → LogBuffer drain
@@ -110,34 +113,18 @@ impl Plugin for StatusPlugin {
         app.add_plugins(ecsdk_replicon::ClientTransportPlugin);
         app.add_systems(Startup, spawn_client_connection);
 
-        // Observers
-        app.add_observer(send_status_request_on_initial_connection);
-        app.add_observer(handle_status_response);
+        app.add_role_plugin(AppRole::Client, StatusFeature);
 
         // Disconnect detection
         app.add_systems(Update, detect_disconnect);
     }
 }
 
-fn send_status_request_on_initial_connection(
-    _trigger: On<Add, InitialConnection>,
-    mut commands: Commands,
-) {
-    commands.client_trigger(StatusRequest);
-}
-
-fn handle_status_response(trigger: On<crate::protocol::StatusResponse>, mut exit: ResMut<AppExit>) {
-    let e = trigger.event();
-    println!("time: {:?}", e.time);
-    println!("note: {}", e.note);
-    exit.0 = true;
-}
-
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
-pub async fn run_client(mode: RenderMode, com: &super::Command) {
+pub fn build_client_app(mode: RenderMode, com: &super::Command) -> (App, ecsdk_app::Receivers<Message>) {
     let (mut app, rx) = ecsdk_app::setup::<Message>();
 
     let wake = app.world().resource::<WakeSignal>().clone();
@@ -153,5 +140,11 @@ pub async fn run_client(mode: RenderMode, com: &super::Command) {
         crate::Command::Up => app.add_plugins(ClientPlugin(mode)),
         crate::Command::Status => app.add_plugins(StatusPlugin),
     };
+
+    (app, rx)
+}
+
+pub async fn run_client(mode: RenderMode, com: &super::Command) {
+    let (mut app, rx) = build_client_app(mode, com);
     ecsdk_app::run_async(&mut app, rx).await;
 }

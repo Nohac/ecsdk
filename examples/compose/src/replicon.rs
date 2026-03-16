@@ -20,17 +20,14 @@ impl Plugin for SharedReplicationPlugin {
         app.replicate::<ContainerName>();
         app.replicate::<ImageRef>();
         app.replicate::<StartOrder>();
-        ContainerPhase::replicate_markers(app);
-        OrchestratorPhase::replicate_markers(app);
         app.replicate::<DownloadProgress>();
         app.replicate::<SystemEntity>();
-        app.replicate::<InitialConnection>();
-        app.replicate::<Connected>();
+
+        ContainerPhase::replicate_markers(app);
+        OrchestratorPhase::replicate_markers(app);
 
         app.add_mapped_server_event::<LogEvent>(Channel::Ordered);
         app.add_server_event::<ServerExitNotice>(Channel::Ordered);
-        app.add_server_event::<crate::protocol::StatusResponse>(Channel::Ordered);
-        app.add_client_event::<crate::protocol::StatusRequest>(Channel::Ordered);
         app.add_client_event::<ShutdownRequest>(Channel::Ordered);
     }
 }
