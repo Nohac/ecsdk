@@ -48,7 +48,7 @@ fn expand_state_component(input: &DeriveInput) -> syn::Result<proc_macro2::Token
 
             Ok(quote! {
                 #[derive(Component, Clone, serde::Serialize, serde::Deserialize)]
-                #[component(on_insert = #hook_ident)]
+                #[component(immutable, on_insert = #hook_ident)]
                 pub struct #variant_ident;
 
                 fn #hook_ident(world: DeferredWorld, ctx: HookContext) {
@@ -119,9 +119,13 @@ fn expand_state_component(input: &DeriveInput) -> syn::Result<proc_macro2::Token
         #vis mod #module_ident {
             use bevy::ecs::prelude::*;
             use bevy::ecs::{lifecycle::HookContext, world::DeferredWorld};
+            use ecsdk_core::WakeSignal;
 
             fn sync_state(mut world: DeferredWorld, entity: Entity, state: super::#enum_ident) {
                 world.commands().entity(entity).insert(state);
+                if let Some(wake) = world.get_resource::<WakeSignal>() {
+                    wake.0.notify_one();
+                }
             }
 
             #(#variants)*
