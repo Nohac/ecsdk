@@ -14,7 +14,7 @@ use crate::backend_mock::MockBackend;
 use crate::container::*;
 use crate::lifecycle::*;
 use crate::message::Message;
-use crate::role::{AppRole, AppRoleExt};
+use crate::isomorphic::{AppRole, IsomorphicAppExt};
 use crate::replicon::{SharedReplicationPlugin, spawn_server_listener};
 use crate::status::StatusFeature;
 
@@ -71,7 +71,7 @@ impl Plugin for DaemonPlugin {
         app.add_plugins(RepliconPlugins.build().set(ServerPlugin::new(PostUpdate)));
         app.add_plugins(SharedReplicationPlugin);
         app.add_plugins(ecsdk_replicon::ServerTransportPlugin);
-        app.add_role_plugin(AppRole::Server, StatusFeature);
+        app.add_isomorphic_plugin(AppRole::Server, StatusFeature);
         app.add_systems(Startup, spawn_server_listener);
 
         // Lifecycle + log/exit broadcast

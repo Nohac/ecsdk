@@ -13,7 +13,7 @@ use crate::container::*;
 use crate::message::Message;
 use crate::protocol::{LogEvent, ServerExitNotice, ShutdownRequest};
 use crate::render::{CrosstermPlugin, RenderMode};
-use crate::role::{AppRole, AppRoleExt};
+use crate::isomorphic::{AppRole, IsomorphicAppExt};
 use crate::replicon::{SharedReplicationPlugin, spawn_client_connection};
 use crate::status::StatusFeature;
 
@@ -75,7 +75,7 @@ impl Plugin for ClientPlugin {
         app.add_plugins(RepliconPlugins);
         app.add_plugins(SharedReplicationPlugin);
         app.add_plugins(ecsdk_replicon::ClientTransportPlugin);
-        app.add_shared_role_plugin(StatusFeature);
+        app.add_shared_plugin(StatusFeature);
         app.add_systems(Startup, spawn_client_connection);
 
         // Tracing → LogBuffer drain
@@ -113,7 +113,7 @@ impl Plugin for StatusPlugin {
         app.add_plugins(ecsdk_replicon::ClientTransportPlugin);
         app.add_systems(Startup, spawn_client_connection);
 
-        app.add_role_plugin(AppRole::Client, StatusFeature);
+        app.add_isomorphic_plugin(AppRole::Client, StatusFeature);
 
         // Disconnect detection
         app.add_systems(Update, detect_disconnect);

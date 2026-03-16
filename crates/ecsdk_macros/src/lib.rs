@@ -1,13 +1,23 @@
 use heck::ToSnakeCase;
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
-use syn::{Data, DeriveInput, Fields, parse_macro_input};
+use syn::{Data, DeriveInput, Fields, LitStr, Path, parse_macro_input};
 
 #[proc_macro_derive(StateComponent)]
 pub fn derive_state_component(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
     match expand_state_component(&input) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
+#[proc_macro_derive(ClientRequest, attributes(request))]
+pub fn derive_client_request(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+
+    match expand_client_request(&input) {
         Ok(tokens) => tokens.into(),
         Err(err) => err.to_compile_error().into(),
     }
@@ -131,4 +141,73 @@ fn expand_state_component(input: &DeriveInput) -> syn::Result<proc_macro2::Token
             #(#variants)*
         }
     })
+}
+
+fn expand_client_request(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
+    if !input.generics.params.is_empty() {
+        return Err(syn::Error::new_spanned(
+            &input.generics,
+            "ClientRequest only supports types without generics",
+        ));
+    }
+
+    let ident = &input.ident;
+    let response = find_request_response(input)?;
+
+    Ok(quote! {
+        impl ecsdk_replicon::ClientRequest for #ident {
+            type Response = #response;
+        }
+
+        impl #ident {
+            pub fn register(app: &mut bevy::app::App)
+            where
+                for<'a> <Self as bevy::prelude::Event>::Trigger<'a>: Default,
+                for<'a> <#response as bevy::prelude::Event>::Trigger<'a>: Default,
+            {
+                <Self as ecsdk_replicon::ClientRequest>::register(app);
+            }
+
+            pub fn reply(
+                commands: &mut bevy::ecs::prelude::Commands,
+                client_id: bevy_replicon::prelude::ClientId,
+                response: #response,
+            ) {
+                <Self as ecsdk_replicon::ClientRequest>::reply(commands, client_id, response);
+            }
+        }
+    })
+}
+
+fn find_request_response(input: &DeriveInput) -> syn::Result<Path> {
+    for attr in &input.attrs {
+        if !attr.path().is_ident("request") {
+            continue;
+        }
+
+        let mut response = None;
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("response") {
+                let value = meta.value()?;
+                let lit: LitStr = value.parse()?;
+                response = Some(lit.parse::<Path>()?);
+                return Ok(());
+            }
+            Err(meta.error("unsupported request attribute"))
+        })?;
+
+        if let Some(response) = response {
+            return Ok(response);
+        }
+
+        return Err(syn::Error::new_spanned(
+            attr,
+            "missing `response = \"Type\"` in request attribute",
+        ));
+    }
+
+    Err(syn::Error::new_spanned(
+        input,
+        "ClientRequest requires `#[request(response = \"Type\")]`",
+    ))
 }
