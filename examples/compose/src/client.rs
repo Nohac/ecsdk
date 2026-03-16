@@ -11,7 +11,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 use crate::container::*;
 use crate::message::Message;
-use crate::protocol::{LogEvent, ServerExitNotice, ShutdownRequest};
+use crate::protocol::{LogEvent, ServerExitNotice, ShutdownRequest, StatusRequest};
 use crate::render::{CrosstermPlugin, RenderMode};
 use crate::replicon::{SharedReplicationPlugin, spawn_client_connection};
 
@@ -97,11 +97,47 @@ impl Plugin for ClientPlugin {
     }
 }
 
+pub struct StatusPlugin;
+
+impl Plugin for StatusPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_plugins(bevy::state::app::StatesPlugin);
+        app.add_plugins(bevy::time::TimePlugin);
+
+        // Replicon client
+        app.add_plugins(RepliconPlugins);
+        app.add_plugins(SharedReplicationPlugin);
+        app.add_plugins(ecsdk_replicon::ClientTransportPlugin);
+        app.add_systems(Startup, spawn_client_connection);
+
+        // Observers
+        app.add_observer(send_status_request_on_initial_connection);
+        app.add_observer(handle_status_response);
+
+        // Disconnect detection
+        app.add_systems(Update, detect_disconnect);
+    }
+}
+
+fn send_status_request_on_initial_connection(
+    _trigger: On<Add, InitialConnection>,
+    mut commands: Commands,
+) {
+    commands.client_trigger(StatusRequest);
+}
+
+fn handle_status_response(trigger: On<crate::protocol::StatusResponse>, mut exit: ResMut<AppExit>) {
+    let e = trigger.event();
+    println!("time: {:?}", e.time);
+    println!("note: {}", e.note);
+    exit.0 = true;
+}
+
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
-pub async fn run_client(mode: RenderMode) {
+pub async fn run_client(mode: RenderMode, com: &super::Command) {
     let (mut app, rx) = ecsdk_app::setup::<Message>();
 
     let wake = app.world().resource::<WakeSignal>().clone();
@@ -113,6 +149,9 @@ pub async fn run_client(mode: RenderMode) {
         .init();
     app.add_plugins(ecsdk_tracing::TracingPlugin::new(tracing_receiver));
 
-    app.add_plugins(ClientPlugin(mode));
+    match com {
+        crate::Command::Up => app.add_plugins(ClientPlugin(mode)),
+        crate::Command::Status => app.add_plugins(StatusPlugin),
+    };
     ecsdk_app::run_async(&mut app, rx).await;
 }

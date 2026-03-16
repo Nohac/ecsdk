@@ -1,3 +1,5 @@
+use std::time::SystemTime;
+
 use bevy::ecs::entity::MapEntities;
 use bevy::ecs::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -14,6 +16,17 @@ impl MapEntities for LogEvent {
     fn map_entities<M: bevy::ecs::entity::EntityMapper>(&mut self, entity_mapper: &mut M) {
         self.container_entity = entity_mapper.get_mapped(self.container_entity);
     }
+}
+
+/// Client requests the server to shut down all containers.
+#[derive(Event, Serialize, Deserialize)]
+pub struct StatusRequest;
+
+/// Client requests the server to shut down all containers.
+#[derive(Event, Serialize, Deserialize)]
+pub struct StatusResponse {
+    pub time: SystemTime,
+    pub note: String,
 }
 
 /// Client requests the server to shut down all containers.

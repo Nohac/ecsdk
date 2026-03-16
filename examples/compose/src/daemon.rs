@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::time::SystemTime;
 
 use bevy::app::prelude::*;
 use bevy::ecs::prelude::*;
@@ -57,6 +58,43 @@ fn handle_shutdown_request(
     commands.trigger(ShutdownAll);
 }
 
+fn handle_status_request(
+    _trigger: On<FromClient<crate::protocol::StatusRequest>>,
+    mut commands: Commands,
+) {
+    commands.server_trigger(ToClients {
+        mode: SendMode::Broadcast,
+        message: crate::protocol::StatusResponse {
+            time: SystemTime::now(),
+            note: "hello from server".into(),
+        },
+    });
+}
+
+fn sync_connection_markers(
+    clients: Query<Entity, With<ConnectedClient>>,
+    system_entity: Single<Entity, With<SystemEntity>>,
+    connected: Query<(), With<Connected>>,
+    initial: Query<(), With<InitialConnection>>,
+    mut commands: Commands,
+) {
+    let system = *system_entity;
+    let has_clients = !clients.is_empty();
+    let is_connected = connected.get(system).is_ok();
+    let has_initial = initial.get(system).is_ok();
+
+    if has_clients {
+        if !has_initial {
+            commands.entity(system).insert(InitialConnection);
+        }
+        if !is_connected {
+            commands.entity(system).insert(Connected);
+        }
+    } else if is_connected {
+        commands.entity(system).remove::<Connected>();
+    }
+}
+
 // ---------------------------------------------------------------------------
 // DaemonPlugin — bundles all server-side registration
 // ---------------------------------------------------------------------------
@@ -82,8 +120,9 @@ impl Plugin for DaemonPlugin {
             crate::container::drain_tracing_logs
                 .run_if(resource_exists::<ecsdk_tracing::TracingReceiver>),
         );
-        app.add_systems(Update, (send_log_events, send_exit_notice));
+        app.add_systems(Update, (sync_connection_markers, send_log_events, send_exit_notice));
         app.add_observer(handle_shutdown_request);
+        app.add_observer(handle_status_request);
 
         // Ctrl+C triggers graceful shutdown
         app.add_systems(Startup, spawn_ctrl_c_handler);

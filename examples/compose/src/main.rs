@@ -15,7 +15,7 @@ mod replicon;
 use std::io::IsTerminal;
 use std::time::Duration;
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use render::RenderMode;
 use tokio::net::UnixStream;
 
@@ -33,6 +33,15 @@ struct Cli {
     /// Run in daemon mode (no UI, serves IPC).
     #[arg(short, long)]
     daemon: bool,
+
+    #[command(subcommand)]
+    pub command: Option<Command>,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum Command {
+    Up,
+    Status,
 }
 
 fn resolve_render_mode(explicit: Option<RenderMode>) -> RenderMode {
@@ -80,12 +89,23 @@ async fn main() {
         run_daemon().await;
     } else {
         let mode = resolve_render_mode(cli.output);
+        let command = cli.command.unwrap_or(Command::Up);
 
-        // Auto-spawn daemon if not already running
-        if !daemon_is_running().await {
-            spawn_daemon().await;
+        match command {
+            Command::Up => {
+                // Auto-spawn daemon if not already running
+                if !daemon_is_running().await {
+                    spawn_daemon().await;
+                }
+            }
+            Command::Status => {
+                if !daemon_is_running().await {
+                    eprintln!("compose status requires a running daemon. Start it with `compose up`.");
+                    std::process::exit(1);
+                }
+            }
         }
 
-        run_client(mode).await;
+        run_client(mode, &command).await;
     }
 }
