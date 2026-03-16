@@ -4,13 +4,17 @@ use bevy::app::prelude::*;
 use bevy::ecs::prelude::*;
 use bevy_replicon::prelude::*;
 use ecsdk_core::AppExit;
-use ecsdk_replicon::InitialConnection;
+use ecsdk_replicon::{ClientRequest, InitialConnection};
 use serde::{Deserialize, Serialize};
 
 use crate::role::RolePlugin;
 
 #[derive(Event, Serialize, Deserialize)]
 pub struct StatusRequest;
+
+impl ClientRequest for StatusRequest {
+    type Response = StatusResponse;
+}
 
 #[derive(Event, Serialize, Deserialize)]
 pub struct StatusResponse {
@@ -22,8 +26,7 @@ pub struct StatusFeature;
 
 impl RolePlugin for StatusFeature {
     fn build_shared(&self, app: &mut App) {
-        app.add_server_event::<StatusResponse>(Channel::Ordered);
-        app.add_client_event::<StatusRequest>(Channel::Ordered);
+        StatusRequest::register(app);
     }
 
     fn build_server(&self, app: &mut App) {
@@ -37,16 +40,17 @@ impl RolePlugin for StatusFeature {
 }
 
 fn handle_status_request(
-    _trigger: On<FromClient<StatusRequest>>,
+    trigger: On<FromClient<StatusRequest>>,
     mut commands: Commands,
 ) {
-    commands.server_trigger(ToClients {
-        mode: SendMode::Broadcast,
-        message: StatusResponse {
+    StatusRequest::reply(
+        &mut commands,
+        trigger.event().client_id,
+        StatusResponse {
             time: SystemTime::now(),
             note: "hello from server".into(),
         },
-    });
+    );
 }
 
 fn send_status_request_on_initial_connection(

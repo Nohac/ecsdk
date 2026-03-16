@@ -5,7 +5,7 @@ use bevy::ecs::prelude::*;
 use bevy::state::prelude::*;
 use bevy_replicon::prelude::*;
 use ecsdk_tasks::SpawnCmdTask;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc;
 
@@ -19,6 +19,33 @@ pub struct InitialConnection;
 
 #[derive(Component, Serialize, Deserialize)]
 pub struct Connected;
+
+pub trait ClientRequest: Event + Serialize + DeserializeOwned {
+    type Response: Event + Serialize + DeserializeOwned;
+
+    const REQUEST_CHANNEL: Channel = Channel::Ordered;
+    const RESPONSE_CHANNEL: Channel = Channel::Ordered;
+
+    fn register(app: &mut App)
+    where
+        for<'a> <Self as Event>::Trigger<'a>: Default,
+        for<'a> <Self::Response as Event>::Trigger<'a>: Default,
+    {
+        app.add_client_event::<Self>(Self::REQUEST_CHANNEL);
+        app.add_server_event::<Self::Response>(Self::RESPONSE_CHANNEL);
+    }
+
+    fn response_mode(client_id: ClientId) -> SendMode {
+        SendMode::Direct(client_id)
+    }
+
+    fn reply(commands: &mut Commands, client_id: ClientId, response: Self::Response) {
+        commands.server_trigger(ToClients {
+            mode: Self::response_mode(client_id),
+            message: response,
+        });
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Server transport plugin
