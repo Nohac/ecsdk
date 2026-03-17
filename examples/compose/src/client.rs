@@ -4,6 +4,7 @@ use bevy::state::prelude::*;
 use bevy_replicon::prelude::*;
 use crossterm::event::{Event, KeyCode, KeyModifiers};
 use ecsdk_core::{AppExit, WakeSignal};
+use ecsdk_replicon::{AppRole, IsomorphicAppExt};
 use ecsdk_term::TerminalEvent;
 use tracing_subscriber::Layer as _;
 use tracing_subscriber::layer::SubscriberExt;
@@ -13,7 +14,6 @@ use crate::container::*;
 use crate::message::Message;
 use crate::protocol::{LogEvent, ServerExitNotice, ShutdownRequest};
 use crate::render::{CrosstermPlugin, RenderMode};
-use crate::isomorphic::{AppRole, IsomorphicAppExt};
 use crate::replicon::{SharedReplicationPlugin, spawn_client_connection};
 use crate::status::StatusFeature;
 

@@ -11,7 +11,6 @@ mod render;
 #[cfg(test)]
 mod replay;
 mod replicon;
-mod isomorphic;
 mod status;
 
 use std::io::IsTerminal;

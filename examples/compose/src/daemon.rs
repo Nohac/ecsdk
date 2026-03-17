@@ -4,6 +4,7 @@ use bevy::app::prelude::*;
 use bevy::ecs::prelude::*;
 use bevy_replicon::prelude::*;
 use ecsdk_core::{AppExit, MessageQueue, WakeSignal};
+use ecsdk_replicon::{AppRole, IsomorphicAppExt};
 use ecsdk_tasks::SpawnTask;
 use tokio::signal::ctrl_c;
 use tracing_subscriber::Layer as _;
@@ -14,7 +15,6 @@ use crate::backend_mock::MockBackend;
 use crate::container::*;
 use crate::lifecycle::*;
 use crate::message::Message;
-use crate::isomorphic::{AppRole, IsomorphicAppExt};
 use crate::replicon::{SharedReplicationPlugin, spawn_server_listener};
 use crate::status::StatusFeature;
 

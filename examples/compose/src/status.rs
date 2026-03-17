@@ -5,9 +5,8 @@ use bevy::ecs::prelude::*;
 use bevy_replicon::prelude::*;
 use ecsdk_core::AppExit;
 use ecsdk_macros::ClientRequest;
+use ecsdk_replicon::RequestPlugin;
 use serde::{Deserialize, Serialize};
-
-use crate::isomorphic::RequestPlugin;
 
 #[derive(Default, Event, ClientRequest, Serialize, Deserialize)]
 #[request(response = "StatusResponse")]
