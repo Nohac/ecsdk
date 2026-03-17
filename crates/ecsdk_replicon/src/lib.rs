@@ -140,6 +140,26 @@ pub struct ServerBridge {
 }
 
 pub struct ServerTransportPlugin;
+pub struct ServerRepliconPlugin;
+pub struct ClientRepliconPlugin;
+
+impl Plugin for ServerRepliconPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_plugins(bevy::state::app::StatesPlugin);
+        app.add_plugins(bevy::time::TimePlugin);
+        app.add_plugins(RepliconPlugins.build().set(ServerPlugin::new(PostUpdate)));
+        app.add_plugins(ServerTransportPlugin);
+    }
+}
+
+impl Plugin for ClientRepliconPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_plugins(bevy::state::app::StatesPlugin);
+        app.add_plugins(bevy::time::TimePlugin);
+        app.add_plugins(RepliconPlugins);
+        app.add_plugins(ClientTransportPlugin);
+    }
+}
 
 impl Plugin for ServerTransportPlugin {
     fn build(&self, app: &mut App) {

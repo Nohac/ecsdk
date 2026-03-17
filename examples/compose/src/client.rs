@@ -64,14 +64,9 @@ pub struct ClientPlugin(pub RenderMode);
 
 impl Plugin for ClientPlugin {
     fn build(&self, app: &mut App) {
-        // Infrastructure plugins required by replicon
-        app.add_plugins(bevy::state::app::StatesPlugin);
-        app.add_plugins(bevy::time::TimePlugin);
-
         // Replicon client
-        app.add_plugins(RepliconPlugins);
+        app.add_plugins(ecsdk::replicon::ClientRepliconPlugin);
         app.add_plugins(SharedReplicationPlugin);
-        app.add_plugins(ecsdk::replicon::ClientTransportPlugin);
         app.add_shared_plugin(StatusFeature);
         app.add_systems(Startup, spawn_client_connection);
 
@@ -101,13 +96,9 @@ pub struct StatusPlugin;
 
 impl Plugin for StatusPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(bevy::state::app::StatesPlugin);
-        app.add_plugins(bevy::time::TimePlugin);
-
         // Replicon client
-        app.add_plugins(RepliconPlugins);
+        app.add_plugins(ecsdk::replicon::ClientRepliconPlugin);
         app.add_plugins(SharedReplicationPlugin);
-        app.add_plugins(ecsdk::replicon::ClientTransportPlugin);
         app.add_systems(Startup, spawn_client_connection);
 
         app.add_isomorphic_plugin(AppRole::Client, StatusFeature);

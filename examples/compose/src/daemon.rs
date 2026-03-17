@@ -60,14 +60,9 @@ pub struct DaemonPlugin;
 
 impl Plugin for DaemonPlugin {
     fn build(&self, app: &mut App) {
-        // Infrastructure plugins required by replicon
-        app.add_plugins(bevy::state::app::StatesPlugin);
-        app.add_plugins(bevy::time::TimePlugin);
-
         // Replicon server
-        app.add_plugins(RepliconPlugins.build().set(ServerPlugin::new(PostUpdate)));
+        app.add_plugins(ecsdk::replicon::ServerRepliconPlugin);
         app.add_plugins(SharedReplicationPlugin);
-        app.add_plugins(ecsdk::replicon::ServerTransportPlugin);
         app.add_isomorphic_plugin(AppRole::Server, StatusFeature);
         app.add_systems(Startup, spawn_server_listener);
 
