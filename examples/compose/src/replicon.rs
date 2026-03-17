@@ -1,9 +1,5 @@
-use bevy::app::prelude::*;
-use bevy::ecs::prelude::*;
-use bevy_replicon::prelude::*;
-use ecsdk_core::AppExit;
-use ecsdk_replicon::{AcceptClientCmd, ConnectClientCmd};
-use ecsdk_tasks::SpawnCmdTask;
+use ecsdk::prelude::*;
+use ecsdk::tasks::SpawnCmdTask;
 use interprocess::local_socket::traits::tokio::Listener as _;
 
 use crate::container::*;
@@ -53,7 +49,7 @@ pub fn spawn_server_listener(mut commands: Commands) {
                 };
 
                 cmd.send(move |world: &mut World| {
-                    AcceptClientCmd { stream }.apply(world);
+                    ecsdk::replicon::AcceptClientCmd { stream }.apply(world);
                 })
                 .wake();
             }
@@ -71,7 +67,7 @@ pub fn spawn_client_connection(mut commands: Commands) {
             match crate::ipc::connect().await {
                 Ok(stream) => {
                     cmd.send(move |world: &mut World| {
-                        ConnectClientCmd { stream }.apply(world);
+                        ecsdk::replicon::ConnectClientCmd { stream }.apply(world);
                     })
                     .wake();
                 }

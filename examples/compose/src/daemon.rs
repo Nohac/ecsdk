@@ -1,11 +1,8 @@
 use std::collections::HashMap;
 
-use bevy::app::prelude::*;
-use bevy::ecs::prelude::*;
-use bevy_replicon::prelude::*;
-use ecsdk_core::{AppExit, MessageQueue, WakeSignal};
-use ecsdk_replicon::{AppRole, IsomorphicAppExt};
-use ecsdk_tasks::SpawnTask;
+use ecsdk::prelude::*;
+use ecsdk::core::{AppExit, MessageQueue, WakeSignal};
+use ecsdk::tasks::SpawnTask;
 use tokio::signal::ctrl_c;
 use tracing_subscriber::Layer as _;
 use tracing_subscriber::layer::SubscriberExt;
@@ -70,7 +67,7 @@ impl Plugin for DaemonPlugin {
         // Replicon server
         app.add_plugins(RepliconPlugins.build().set(ServerPlugin::new(PostUpdate)));
         app.add_plugins(SharedReplicationPlugin);
-        app.add_plugins(ecsdk_replicon::ServerTransportPlugin);
+        app.add_plugins(ecsdk::replicon::ServerTransportPlugin);
         app.add_isomorphic_plugin(AppRole::Server, StatusFeature);
         app.add_systems(Startup, spawn_server_listener);
 
@@ -79,7 +76,7 @@ impl Plugin for DaemonPlugin {
         app.add_systems(
             PreUpdate,
             crate::container::drain_tracing_logs
-                .run_if(resource_exists::<ecsdk_tracing::TracingReceiver>),
+                .run_if(resource_exists::<ecsdk::tracing::TracingReceiver>),
         );
         app.add_systems(Update, (send_log_events, send_exit_notice));
         app.add_observer(handle_shutdown_request);
@@ -100,7 +97,7 @@ fn spawn_ctrl_c_handler(mut commands: Commands) {
 // Entry point
 // ---------------------------------------------------------------------------
 
-pub fn build_server_app() -> (App, ecsdk_app::Receivers<Message>) {
+pub fn build_server_app() -> (App, ecsdk::app::Receivers<Message>) {
     let containers = [
         ("postgres", "postgres:16", 0),
         ("redis", "redis:7", 0),
@@ -108,16 +105,16 @@ pub fn build_server_app() -> (App, ecsdk_app::Receivers<Message>) {
         ("web-frontend", "myapp/web:latest", 2),
     ];
 
-    let (mut app, rx) = ecsdk_app::setup::<Message>();
+    let (mut app, rx) = ecsdk::app::setup::<Message>();
 
     let wake = app.world().resource::<WakeSignal>().clone();
-    let (tracing_layer, tracing_receiver) = ecsdk_tracing::setup(wake);
+    let (tracing_layer, tracing_receiver) = ecsdk::tracing::setup(wake);
     tracing_subscriber::registry()
         .with(tracing_layer.with_filter(
             tracing_subscriber::filter::Targets::new().with_target("compose", tracing::Level::INFO),
         ))
         .init();
-    app.add_plugins(ecsdk_tracing::TracingPlugin::new(tracing_receiver));
+    app.add_plugins(ecsdk::tracing::TracingPlugin::new(tracing_receiver));
 
     app.add_plugins(DaemonPlugin);
 
@@ -148,7 +145,7 @@ pub fn build_server_app() -> (App, ecsdk_app::Receivers<Message>) {
 
 pub async fn run_daemon() {
     let (mut app, rx) = build_server_app();
-    ecsdk_app::run_async(&mut app, rx).await;
+    ecsdk::app::run_async(&mut app, rx).await;
 
     let _ = std::fs::remove_file(crate::ipc::SOCKET_PATH);
     tracing::info!("Daemon shut down");

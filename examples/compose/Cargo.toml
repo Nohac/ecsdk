@@ -8,15 +8,9 @@ name = "compose"
 path = "src/main.rs"
 
 [dependencies]
-ecsdk_core = { workspace = true }
-ecsdk_macros = { workspace = true }
-ecsdk_app = { workspace = true }
-ecsdk_tasks = { workspace = true }
-ecsdk_term = { workspace = true }
-ecsdk_replicon = { workspace = true }
+ecsdk = { workspace = true, features = ["app", "tasks", "term", "replicon", "tracing", "macros"] }
 
 bevy = { workspace = true, features = ["bevy_state", "serialize"] }
-bevy_replicon = { workspace = true }
 seldom_state = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -26,6 +20,5 @@ crossterm = { workspace = true }
 clap = { workspace = true }
 rand = { workspace = true }
 anyhow = { workspace = true }
-ecsdk_tracing = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

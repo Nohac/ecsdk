@@ -1,11 +1,6 @@
 use std::time::SystemTime;
 
-use bevy::app::prelude::*;
-use bevy::ecs::prelude::*;
-use bevy_replicon::prelude::*;
-use ecsdk_core::AppExit;
-use ecsdk_macros::ClientRequest;
-use ecsdk_replicon::RequestPlugin;
+use ecsdk::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Default, Event, ClientRequest, Serialize, Deserialize)]
@@ -22,7 +17,7 @@ pub struct StatusFeature;
 
 impl RequestPlugin for StatusFeature {
     type Request = StatusRequest;
-    type Trigger = ecsdk_replicon::InitialConnection;
+    type Trigger = ecsdk::replicon::InitialConnection;
 
     fn build_server(app: &mut App) {
         app.add_observer(handle_status_request);

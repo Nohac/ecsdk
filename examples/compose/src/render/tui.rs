@@ -8,7 +8,7 @@ use crossterm::{
     style::{Attribute, Color, Print, ResetColor, SetAttribute, SetForegroundColor},
     terminal::{Clear, ClearType, ScrollUp},
 };
-use ecsdk_term::{Rect, TerminalSize, reset_scroll_region, set_scroll_region};
+use ecsdk::term::{Rect, TerminalSize, reset_scroll_region, set_scroll_region};
 
 use crate::container::*;
 

@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/ecsdk",
     "crates/ecsdk_macros",
     "crates/ecsdk_core",
     "crates/ecsdk_app",
@@ -14,6 +15,7 @@ resolver = "3"
 
 [workspace.dependencies]
 # Internal
+ecsdk = { path = "crates/ecsdk" }
 ecsdk_core = { path = "crates/ecsdk_core" }
 ecsdk_macros = { path = "crates/ecsdk_macros" }
 ecsdk_app = { path = "crates/ecsdk_app" }

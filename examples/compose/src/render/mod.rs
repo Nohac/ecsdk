@@ -1,11 +1,11 @@
 mod plain;
 mod tui;
 
-pub use ecsdk_term::TerminalGuard;
+pub use ecsdk::term::TerminalGuard;
 
-use bevy::app::prelude::*;
+use ecsdk::prelude::*;
 use clap::ValueEnum;
-use ecsdk_term::TermPlugin;
+use ecsdk::term::TermPlugin;
 
 use crate::container::build_merged_log_view;
 

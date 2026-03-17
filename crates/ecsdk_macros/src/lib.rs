@@ -1,5 +1,10 @@
+//! Proc macros for `ecsdk`.
+//!
+//! These derives assume consumers depend on the public `ecsdk` facade crate.
+
 use heck::ToSnakeCase;
 use proc_macro::TokenStream;
+use proc_macro_crate::{FoundCrate, crate_name};
 use quote::{format_ident, quote};
 use syn::{Data, DeriveInput, Fields, LitStr, Path, parse_macro_input};
 
@@ -24,6 +29,8 @@ pub fn derive_client_request(input: TokenStream) -> TokenStream {
 }
 
 fn expand_state_component(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
+    let ecsdk = ecsdk_path();
+
     if !input.generics.params.is_empty() {
         return Err(syn::Error::new_spanned(
             &input.generics,
@@ -57,7 +64,7 @@ fn expand_state_component(input: &DeriveInput) -> syn::Result<proc_macro2::Token
             let hook_ident = format_ident!("on_insert_{}", variant_ident.to_string().to_snake_case());
 
             Ok(quote! {
-                #[derive(Component, Clone, serde::Serialize, serde::Deserialize)]
+                #[derive(Component, Clone, #ecsdk::serde::Serialize, #ecsdk::serde::Deserialize)]
                 #[component(immutable, on_insert = #hook_ident)]
                 pub struct #variant_ident;
 
@@ -107,29 +114,29 @@ fn expand_state_component(input: &DeriveInput) -> syn::Result<proc_macro2::Token
 
     Ok(quote! {
         impl #enum_ident {
-            pub fn insert_marker(self, entity: &mut bevy::ecs::system::EntityCommands<'_>) {
+            pub fn insert_marker(self, entity: &mut #ecsdk::bevy::ecs::system::EntityCommands<'_>) {
                 match self {
                     #(#entity_commands_arms)*
                 }
             }
 
-            pub fn insert_marker_world(self, entity: &mut bevy::ecs::world::EntityWorldMut<'_>) {
+            pub fn insert_marker_world(self, entity: &mut #ecsdk::bevy::ecs::world::EntityWorldMut<'_>) {
                 match self {
                     #(#entity_world_mut_arms)*
                 }
             }
 
-            pub fn replicate_markers(app: &mut bevy::app::App) {
-                use bevy_replicon::prelude::AppRuleExt as _;
+            pub fn replicate_markers(app: &mut #ecsdk::bevy::app::App) {
+                use #ecsdk::bevy_replicon::prelude::AppRuleExt as _;
 
                 #(#replicate_marker_calls)*
             }
         }
 
         #vis mod #module_ident {
-            use bevy::ecs::prelude::*;
-            use bevy::ecs::{lifecycle::HookContext, world::DeferredWorld};
-            use ecsdk_core::WakeSignal;
+            use #ecsdk::bevy::ecs::prelude::*;
+            use #ecsdk::bevy::ecs::{lifecycle::HookContext, world::DeferredWorld};
+            use #ecsdk::core::WakeSignal;
 
             fn sync_state(mut world: DeferredWorld, entity: Entity, state: super::#enum_ident) {
                 world.commands().entity(entity).insert(state);
@@ -144,6 +151,8 @@ fn expand_state_component(input: &DeriveInput) -> syn::Result<proc_macro2::Token
 }
 
 fn expand_client_request(input: &DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
+    let ecsdk = ecsdk_path();
+
     if !input.generics.params.is_empty() {
         return Err(syn::Error::new_spanned(
             &input.generics,
@@ -155,28 +164,39 @@ fn expand_client_request(input: &DeriveInput) -> syn::Result<proc_macro2::TokenS
     let response = find_request_response(input)?;
 
     Ok(quote! {
-        impl ecsdk_replicon::ClientRequest for #ident {
+        impl #ecsdk::replicon::ClientRequest for #ident {
             type Response = #response;
         }
 
         impl #ident {
-            pub fn register(app: &mut bevy::app::App)
+            pub fn register(app: &mut #ecsdk::bevy::app::App)
             where
-                for<'a> <Self as bevy::prelude::Event>::Trigger<'a>: Default,
-                for<'a> <#response as bevy::prelude::Event>::Trigger<'a>: Default,
+                for<'a> <Self as #ecsdk::bevy::prelude::Event>::Trigger<'a>: Default,
+                for<'a> <#response as #ecsdk::bevy::prelude::Event>::Trigger<'a>: Default,
             {
-                <Self as ecsdk_replicon::ClientRequest>::register(app);
+                <Self as #ecsdk::replicon::ClientRequest>::register(app);
             }
 
             pub fn reply(
-                commands: &mut bevy::ecs::prelude::Commands,
-                client_id: bevy_replicon::prelude::ClientId,
+                commands: &mut #ecsdk::bevy::ecs::prelude::Commands,
+                client_id: #ecsdk::bevy_replicon::prelude::ClientId,
                 response: #response,
             ) {
-                <Self as ecsdk_replicon::ClientRequest>::reply(commands, client_id, response);
+                <Self as #ecsdk::replicon::ClientRequest>::reply(commands, client_id, response);
             }
         }
     })
+}
+
+fn ecsdk_path() -> Path {
+    match crate_name("ecsdk") {
+        Ok(FoundCrate::Itself) => syn::parse_quote!(crate),
+        Ok(FoundCrate::Name(name)) => {
+            let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
+            syn::parse_quote!(#ident)
+        }
+        Err(_) => syn::parse_quote!(ecsdk),
+    }
 }
 
 fn find_request_response(input: &DeriveInput) -> syn::Result<Path> {

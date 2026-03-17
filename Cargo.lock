@@ -1384,16 +1384,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bevy",
- "bevy_replicon",
  "clap",
  "crossterm",
- "ecsdk_app",
- "ecsdk_core",
- "ecsdk_macros",
- "ecsdk_replicon",
- "ecsdk_tasks",
- "ecsdk_term",
- "ecsdk_tracing",
+ "ecsdk",
  "interprocess",
  "rand",
  "seldom_state",
@@ -1749,6 +1742,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 
 [[package]]
+name = "ecsdk"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "bevy_replicon",
+ "ecsdk_app",
+ "ecsdk_core",
+ "ecsdk_macros",
+ "ecsdk_replicon",
+ "ecsdk_replicon_transport",
+ "ecsdk_tasks",
+ "ecsdk_term",
+ "ecsdk_tracing",
+ "serde",
+]
+
+[[package]]
 name = "ecsdk_app"
 version = "0.1.0"
 dependencies = [
@@ -1770,6 +1780,7 @@ name = "ecsdk_macros"
 version = "0.1.0"
 dependencies = [
  "heck",
+ "proc-macro-crate",
  "proc-macro2",
  "quote",
  "syn",

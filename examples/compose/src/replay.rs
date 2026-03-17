@@ -1,5 +1,5 @@
 use bevy::app::App;
-use ecsdk_core::ApplyMessage;
+use ecsdk::core::ApplyMessage;
 
 use crate::lifecycle::LifecycleTestPlugin;
 use crate::message::Message;

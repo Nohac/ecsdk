@@ -1,11 +1,8 @@
-use bevy::app::prelude::*;
-use bevy::ecs::prelude::*;
 use bevy::state::prelude::*;
-use bevy_replicon::prelude::*;
 use crossterm::event::{Event, KeyCode, KeyModifiers};
-use ecsdk_core::{AppExit, WakeSignal};
-use ecsdk_replicon::{AppRole, IsomorphicAppExt};
-use ecsdk_term::TerminalEvent;
+use ecsdk::prelude::*;
+use ecsdk::core::{AppExit, WakeSignal};
+use ecsdk::term::TerminalEvent;
 use tracing_subscriber::Layer as _;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -74,7 +71,7 @@ impl Plugin for ClientPlugin {
         // Replicon client
         app.add_plugins(RepliconPlugins);
         app.add_plugins(SharedReplicationPlugin);
-        app.add_plugins(ecsdk_replicon::ClientTransportPlugin);
+        app.add_plugins(ecsdk::replicon::ClientTransportPlugin);
         app.add_shared_plugin(StatusFeature);
         app.add_systems(Startup, spawn_client_connection);
 
@@ -82,7 +79,7 @@ impl Plugin for ClientPlugin {
         app.add_systems(
             PreUpdate,
             crate::container::drain_tracing_logs
-                .run_if(resource_exists::<ecsdk_tracing::TracingReceiver>),
+                .run_if(resource_exists::<ecsdk::tracing::TracingReceiver>),
         );
 
         // Rendering
@@ -110,7 +107,7 @@ impl Plugin for StatusPlugin {
         // Replicon client
         app.add_plugins(RepliconPlugins);
         app.add_plugins(SharedReplicationPlugin);
-        app.add_plugins(ecsdk_replicon::ClientTransportPlugin);
+        app.add_plugins(ecsdk::replicon::ClientTransportPlugin);
         app.add_systems(Startup, spawn_client_connection);
 
         app.add_isomorphic_plugin(AppRole::Client, StatusFeature);
@@ -124,17 +121,17 @@ impl Plugin for StatusPlugin {
 // Entry point
 // ---------------------------------------------------------------------------
 
-pub fn build_client_app(mode: RenderMode, com: &super::Command) -> (App, ecsdk_app::Receivers<Message>) {
-    let (mut app, rx) = ecsdk_app::setup::<Message>();
+pub fn build_client_app(mode: RenderMode, com: &super::Command) -> (App, ecsdk::app::Receivers<Message>) {
+    let (mut app, rx) = ecsdk::app::setup::<Message>();
 
     let wake = app.world().resource::<WakeSignal>().clone();
-    let (tracing_layer, tracing_receiver) = ecsdk_tracing::setup(wake);
+    let (tracing_layer, tracing_receiver) = ecsdk::tracing::setup(wake);
     tracing_subscriber::registry()
         .with(tracing_layer.with_filter(
             tracing_subscriber::filter::Targets::new().with_target("compose", tracing::Level::INFO),
         ))
         .init();
-    app.add_plugins(ecsdk_tracing::TracingPlugin::new(tracing_receiver));
+    app.add_plugins(ecsdk::tracing::TracingPlugin::new(tracing_receiver));
 
     match com {
         crate::Command::Up => app.add_plugins(ClientPlugin(mode)),
@@ -146,5 +143,5 @@ pub fn build_client_app(mode: RenderMode, com: &super::Command) -> (App, ecsdk_a
 
 pub async fn run_client(mode: RenderMode, com: &super::Command) {
     let (mut app, rx) = build_client_app(mode, com);
-    ecsdk_app::run_async(&mut app, rx).await;
+    ecsdk::app::run_async(&mut app, rx).await;
 }

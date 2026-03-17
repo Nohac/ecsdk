@@ -1,5 +1,5 @@
 use bevy::ecs::entity::MapEntities;
-use bevy::ecs::prelude::*;
+use ecsdk::prelude::*;
 use serde::{Deserialize, Serialize};
 
 /// A log line from a container or system entity, sent as a server event.

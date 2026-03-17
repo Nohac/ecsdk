@@ -1,8 +1,7 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
-use bevy::ecs::prelude::*;
-use ecsdk_macros::StateComponent;
+use ecsdk::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Component, Serialize, Deserialize)]
@@ -97,7 +96,7 @@ pub struct MergedLogView {
 
 /// Drains tracing events into entity LogBuffers.
 pub fn drain_tracing_logs(
-    mut receiver: ResMut<ecsdk_tracing::TracingReceiver>,
+    mut receiver: ResMut<ecsdk::tracing::TracingReceiver>,
     mut logs: Query<&mut LogBuffer>,
     system_entity: Query<Entity, With<SystemEntity>>,
 ) {

@@ -1,7 +1,5 @@
-use bevy::app::prelude::*;
-use bevy::ecs::prelude::*;
-use ecsdk_core::{MessageQueue, ScheduleControl};
-use ecsdk_tasks::SpawnTask;
+use ecsdk::prelude::*;
+use ecsdk::tasks::SpawnTask;
 use seldom_state::prelude::*;
 use tracing::Instrument;
 
@@ -276,7 +274,7 @@ fn on_all_stopped(
     _trigger: On<Insert, AllStopped>,
     mut logs: Query<&mut LogBuffer>,
     system_entity: Query<Entity, With<SystemEntity>>,
-    mut exit: ResMut<ecsdk_core::AppExit>,
+    mut exit: ResMut<ecsdk::core::AppExit>,
 ) {
     if let Ok(sys) = system_entity.single()
         && let Ok(mut log_buf) = logs.get_mut(sys)

@@ -1,5 +1,4 @@
-use bevy::ecs::prelude::*;
-use ecsdk_core::ApplyMessage;
+use ecsdk::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::container::*;
