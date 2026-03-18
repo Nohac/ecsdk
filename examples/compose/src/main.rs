@@ -39,7 +39,7 @@ struct Cli {
     pub command: Option<Command>,
 }
 
-#[derive(Subcommand, Debug)]
+#[derive(Subcommand, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
     Up,
     Status,

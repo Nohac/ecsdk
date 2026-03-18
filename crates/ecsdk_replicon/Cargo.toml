@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+ecsdk_app = { workspace = true }
 ecsdk_core = { workspace = true }
 ecsdk_tasks = { workspace = true }
 ecsdk_replicon_transport = { workspace = true }

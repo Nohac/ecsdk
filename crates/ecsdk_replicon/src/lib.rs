@@ -1,9 +1,12 @@
 use std::collections::HashMap;
+use std::ops::{Deref, DerefMut};
 
 use bevy::app::prelude::*;
 use bevy::ecs::prelude::*;
 use bevy::state::prelude::*;
 use bevy_replicon::prelude::*;
+use ecsdk_app::Receivers;
+use ecsdk_core::ApplyMessage;
 use ecsdk_tasks::SpawnCmdTask;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -30,6 +33,134 @@ pub trait IsomorphicPlugin {
     fn build_shared(&self, _app: &mut App) {}
     fn build_server(&self, _app: &mut App) {}
     fn build_client(&self, _app: &mut App) {}
+}
+
+pub trait ScopedIsomorphicPlugin<S>: 'static {
+    fn shared_scope(&self) -> Option<S> {
+        None
+    }
+
+    fn server_scope(&self) -> Option<S> {
+        None
+    }
+
+    fn client_scope(&self) -> Option<S> {
+        None
+    }
+
+    fn build_shared(&self, _app: &mut App) {}
+    fn build_server(&self, _app: &mut App) {}
+    fn build_client(&self, _app: &mut App) {}
+}
+
+enum PluginEntry<S> {
+    Always(Box<dyn IsomorphicPlugin>),
+    Scoped(Box<dyn ScopedIsomorphicPlugin<S>>),
+}
+
+pub struct IsomorphicApp<M: ApplyMessage, S = ()> {
+    plugins: Vec<PluginEntry<S>>,
+    marker: std::marker::PhantomData<M>,
+}
+
+pub struct BuiltIsomorphicApp<M: ApplyMessage> {
+    app: App,
+    receivers: Receivers<M>,
+}
+
+impl<M: ApplyMessage, S: Copy + Eq + 'static> IsomorphicApp<M, S> {
+    pub fn new() -> Self {
+        Self {
+            plugins: Vec::new(),
+            marker: std::marker::PhantomData,
+        }
+    }
+
+    pub fn add_plugin<P: IsomorphicPlugin + 'static>(&mut self, plugin: P) -> &mut Self {
+        self.plugins.push(PluginEntry::Always(Box::new(plugin)));
+        self
+    }
+
+    pub fn add_scoped_plugin<P: ScopedIsomorphicPlugin<S> + 'static>(&mut self, plugin: P) -> &mut Self {
+        self.plugins.push(PluginEntry::Scoped(Box::new(plugin)));
+        self
+    }
+
+    pub fn build_server(self, scope: S) -> BuiltIsomorphicApp<M> {
+        self.build(AppRole::Server, scope)
+    }
+
+    pub fn build_client(self, scope: S) -> BuiltIsomorphicApp<M> {
+        self.build(AppRole::Client, scope)
+    }
+
+    fn build(self, role: AppRole, scope: S) -> BuiltIsomorphicApp<M> {
+        let (mut app, receivers) = ecsdk_app::setup::<M>();
+        match role {
+            AppRole::Server => app.add_plugins(ServerRepliconPlugin),
+            AppRole::Client => app.add_plugins(ClientRepliconPlugin),
+        };
+        for plugin in self.plugins {
+            match plugin {
+                PluginEntry::Always(plugin) => {
+                    plugin.build_shared(&mut app);
+                    match role {
+                        AppRole::Server => plugin.build_server(&mut app),
+                        AppRole::Client => plugin.build_client(&mut app),
+                    }
+                }
+                PluginEntry::Scoped(plugin) => {
+                    if plugin.shared_scope().is_none_or(|s| s == scope) {
+                        plugin.build_shared(&mut app);
+                    }
+                    match role {
+                        AppRole::Server => {
+                            if plugin.server_scope().is_none_or(|s| s == scope) {
+                                plugin.build_server(&mut app);
+                            }
+                        }
+                        AppRole::Client => {
+                            if plugin.client_scope().is_none_or(|s| s == scope) {
+                                plugin.build_client(&mut app);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        BuiltIsomorphicApp { app, receivers }
+    }
+}
+
+impl<M: ApplyMessage, S: Copy + Eq + 'static> Default for IsomorphicApp<M, S> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<M: ApplyMessage> BuiltIsomorphicApp<M> {
+    pub fn into_parts(self) -> (App, Receivers<M>) {
+        (self.app, self.receivers)
+    }
+
+    pub async fn run(mut self) {
+        ecsdk_app::run_async(&mut self.app, self.receivers).await;
+    }
+}
+
+impl<M: ApplyMessage> Deref for BuiltIsomorphicApp<M> {
+    type Target = App;
+
+    fn deref(&self) -> &Self::Target {
+        &self.app
+    }
+}
+
+impl<M: ApplyMessage> DerefMut for BuiltIsomorphicApp<M> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.app
+    }
 }
 
 pub trait IsomorphicAppExt {
@@ -81,7 +212,7 @@ pub trait ClientRequest: Event + Serialize + DeserializeOwned {
     }
 }
 
-pub trait RequestPlugin {
+pub trait RequestPlugin<S = ()> {
     type Request: ClientRequest;
     type Trigger: Component;
 
@@ -92,17 +223,42 @@ pub trait RequestPlugin {
         Default::default()
     }
 
+    fn shared_scope() -> Option<S> {
+        None
+    }
+
+    fn server_scope() -> Option<S> {
+        None
+    }
+
+    fn client_scope() -> Option<S> {
+        None
+    }
+
     fn build_server(app: &mut App);
     fn build_client(app: &mut App);
 }
 
-impl<T> IsomorphicPlugin for T
+impl<T, S> ScopedIsomorphicPlugin<S> for T
 where
-    T: RequestPlugin + 'static,
+    T: RequestPlugin<S> + 'static,
+    S: Copy + 'static,
     T::Request: Default,
     for<'a> <T::Request as Event>::Trigger<'a>: Default,
     for<'a> <<T::Request as ClientRequest>::Response as Event>::Trigger<'a>: Default,
 {
+    fn shared_scope(&self) -> Option<S> {
+        <T as RequestPlugin<S>>::shared_scope()
+    }
+
+    fn server_scope(&self) -> Option<S> {
+        <T as RequestPlugin<S>>::server_scope()
+    }
+
+    fn client_scope(&self) -> Option<S> {
+        <T as RequestPlugin<S>>::client_scope()
+    }
+
     fn build_shared(&self, app: &mut App) {
         T::Request::register(app);
     }
@@ -112,14 +268,14 @@ where
     }
 
     fn build_client(&self, app: &mut App) {
-        app.add_observer(send_request_on_trigger::<T>);
+        app.add_observer(send_request_on_trigger::<T, S>);
         T::build_client(app);
     }
 }
 
-fn send_request_on_trigger<T>(_trigger: On<Add, T::Trigger>, mut commands: Commands)
+fn send_request_on_trigger<T, S>(_trigger: On<Add, T::Trigger>, mut commands: Commands)
 where
-    T: RequestPlugin,
+    T: RequestPlugin<S>,
     T::Request: Default,
 {
     commands.client_trigger(T::request());

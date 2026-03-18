@@ -15,9 +15,13 @@ pub struct StatusResponse {
 
 pub struct StatusFeature;
 
-impl RequestPlugin for StatusFeature {
+impl RequestPlugin<crate::Command> for StatusFeature {
     type Request = StatusRequest;
     type Trigger = ecsdk::replicon::InitialConnection;
+
+    fn client_scope() -> Option<crate::Command> {
+        Some(crate::Command::Status)
+    }
 
     fn build_server(app: &mut App) {
         app.add_observer(handle_status_request);

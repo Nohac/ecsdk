@@ -11,8 +11,8 @@ use crate::protocol::{LogEvent, ServerExitNotice, ShutdownRequest};
 
 pub struct SharedReplicationPlugin;
 
-impl Plugin for SharedReplicationPlugin {
-    fn build(&self, app: &mut App) {
+impl IsomorphicPlugin for SharedReplicationPlugin {
+    fn build_shared(&self, app: &mut App) {
         app.replicate::<ContainerName>();
         app.replicate::<ImageRef>();
         app.replicate::<StartOrder>();
@@ -25,6 +25,18 @@ impl Plugin for SharedReplicationPlugin {
         app.add_mapped_server_event::<LogEvent>(Channel::Ordered);
         app.add_server_event::<ServerExitNotice>(Channel::Ordered);
         app.add_client_event::<ShutdownRequest>(Channel::Ordered);
+    }
+}
+
+pub struct ConnectionPlugin;
+
+impl IsomorphicPlugin for ConnectionPlugin {
+    fn build_server(&self, app: &mut App) {
+        app.add_systems(Startup, spawn_server_listener);
+    }
+
+    fn build_client(&self, app: &mut App) {
+        app.add_systems(Startup, spawn_client_connection);
     }
 }
 

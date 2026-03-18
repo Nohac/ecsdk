@@ -1792,6 +1792,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "bevy_replicon",
+ "ecsdk_app",
  "ecsdk_core",
  "ecsdk_replicon_transport",
  "ecsdk_tasks",

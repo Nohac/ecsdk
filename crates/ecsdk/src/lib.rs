@@ -35,7 +35,7 @@ pub mod prelude {
 
     #[cfg(feature = "replicon")]
     pub use ecsdk_replicon::{
-        AppRole, ClientRequest, InitialConnection, IsomorphicAppExt, IsomorphicPlugin,
-        RequestPlugin,
+        AppRole, BuiltIsomorphicApp, ClientRequest, InitialConnection, IsomorphicApp,
+        IsomorphicAppExt, IsomorphicPlugin, RequestPlugin, ScopedIsomorphicPlugin,
     };
 }

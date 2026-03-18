@@ -11,7 +11,7 @@ use crate::container::*;
 use crate::message::Message;
 use crate::protocol::{LogEvent, ServerExitNotice, ShutdownRequest};
 use crate::render::{CrosstermPlugin, RenderMode};
-use crate::replicon::{SharedReplicationPlugin, spawn_client_connection};
+use crate::replicon::{ConnectionPlugin, SharedReplicationPlugin};
 use crate::status::StatusFeature;
 
 // ---------------------------------------------------------------------------
@@ -64,12 +64,6 @@ pub struct ClientPlugin(pub RenderMode);
 
 impl Plugin for ClientPlugin {
     fn build(&self, app: &mut App) {
-        // Replicon client
-        app.add_plugins(ecsdk::replicon::ClientRepliconPlugin);
-        app.add_plugins(SharedReplicationPlugin);
-        app.add_shared_plugin(StatusFeature);
-        app.add_systems(Startup, spawn_client_connection);
-
         // Tracing → LogBuffer drain
         app.add_systems(
             PreUpdate,
@@ -96,13 +90,6 @@ pub struct StatusPlugin;
 
 impl Plugin for StatusPlugin {
     fn build(&self, app: &mut App) {
-        // Replicon client
-        app.add_plugins(ecsdk::replicon::ClientRepliconPlugin);
-        app.add_plugins(SharedReplicationPlugin);
-        app.add_systems(Startup, spawn_client_connection);
-
-        app.add_isomorphic_plugin(AppRole::Client, StatusFeature);
-
         // Disconnect detection
         app.add_systems(Update, detect_disconnect);
     }
@@ -113,7 +100,12 @@ impl Plugin for StatusPlugin {
 // ---------------------------------------------------------------------------
 
 pub fn build_client_app(mode: RenderMode, com: &super::Command) -> (App, ecsdk::app::Receivers<Message>) {
-    let (mut app, rx) = ecsdk::app::setup::<Message>();
+    let mut iso = IsomorphicApp::<Message, crate::Command>::new();
+    iso.add_plugin(SharedReplicationPlugin);
+    iso.add_plugin(ConnectionPlugin);
+    iso.add_scoped_plugin(StatusFeature);
+
+    let mut app = iso.build_client(*com);
 
     let wake = app.world().resource::<WakeSignal>().clone();
     let (tracing_layer, tracing_receiver) = ecsdk::tracing::setup(wake);
@@ -129,7 +121,7 @@ pub fn build_client_app(mode: RenderMode, com: &super::Command) -> (App, ecsdk::
         crate::Command::Status => app.add_plugins(StatusPlugin),
     };
 
-    (app, rx)
+    app.into_parts()
 }
 
 pub async fn run_client(mode: RenderMode, com: &super::Command) {

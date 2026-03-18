@@ -12,7 +12,7 @@ use crate::backend_mock::MockBackend;
 use crate::container::*;
 use crate::lifecycle::*;
 use crate::message::Message;
-use crate::replicon::{SharedReplicationPlugin, spawn_server_listener};
+use crate::replicon::{ConnectionPlugin, SharedReplicationPlugin};
 use crate::status::StatusFeature;
 
 fn send_log_events(
@@ -60,12 +60,6 @@ pub struct DaemonPlugin;
 
 impl Plugin for DaemonPlugin {
     fn build(&self, app: &mut App) {
-        // Replicon server
-        app.add_plugins(ecsdk::replicon::ServerRepliconPlugin);
-        app.add_plugins(SharedReplicationPlugin);
-        app.add_isomorphic_plugin(AppRole::Server, StatusFeature);
-        app.add_systems(Startup, spawn_server_listener);
-
         // Lifecycle + log/exit broadcast
         app.add_plugins(LifecyclePlugin);
         app.add_systems(
@@ -100,7 +94,12 @@ pub fn build_server_app() -> (App, ecsdk::app::Receivers<Message>) {
         ("web-frontend", "myapp/web:latest", 2),
     ];
 
-    let (mut app, rx) = ecsdk::app::setup::<Message>();
+    let mut iso = IsomorphicApp::<Message, crate::Command>::new();
+    iso.add_plugin(SharedReplicationPlugin);
+    iso.add_plugin(ConnectionPlugin);
+    iso.add_scoped_plugin(StatusFeature);
+
+    let mut app = iso.build_server(crate::Command::Up);
 
     let wake = app.world().resource::<WakeSignal>().clone();
     let (tracing_layer, tracing_receiver) = ecsdk::tracing::setup(wake);
@@ -135,7 +134,7 @@ pub fn build_server_app() -> (App, ecsdk::app::Receivers<Message>) {
     // Backend factory — attach backends to containers spawned by state events
     app.add_observer(attach_mock_backend);
 
-    (app, rx)
+    app.into_parts()
 }
 
 pub async fn run_daemon() {
