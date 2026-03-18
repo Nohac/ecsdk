@@ -12,8 +12,6 @@ use crate::backend_mock::MockBackend;
 use crate::container::*;
 use crate::lifecycle::*;
 use crate::message::Message;
-use crate::replicon::{ConnectionPlugin, SharedReplicationPlugin};
-use crate::status::StatusFeature;
 
 fn send_log_events(
     mut commands: Commands,
@@ -86,18 +84,13 @@ fn spawn_ctrl_c_handler(mut commands: Commands) {
 // Entry point
 // ---------------------------------------------------------------------------
 
-pub fn build_server_app() -> (App, ecsdk::app::Receivers<Message>) {
+pub fn build_server_app(iso: IsomorphicApp<Message, crate::Command>) -> (App, ecsdk::app::Receivers<Message>) {
     let containers = [
         ("postgres", "postgres:16", 0),
         ("redis", "redis:7", 0),
         ("api-server", "myapp/api:latest", 1),
         ("web-frontend", "myapp/web:latest", 2),
     ];
-
-    let mut iso = IsomorphicApp::<Message, crate::Command>::new();
-    iso.add_plugin(SharedReplicationPlugin);
-    iso.add_plugin(ConnectionPlugin);
-    iso.add_scoped_plugin(StatusFeature);
 
     let mut app = iso.build_server(crate::Command::Up);
 
@@ -137,8 +130,8 @@ pub fn build_server_app() -> (App, ecsdk::app::Receivers<Message>) {
     app.into_parts()
 }
 
-pub async fn run_daemon() {
-    let (mut app, rx) = build_server_app();
+pub async fn run_daemon(iso: IsomorphicApp<Message, crate::Command>) {
+    let (mut app, rx) = build_server_app(iso);
     ecsdk::app::run_async(&mut app, rx).await;
 
     let _ = std::fs::remove_file(crate::ipc::SOCKET_PATH);

@@ -17,12 +17,16 @@ use std::io::IsTerminal;
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
+use ecsdk::prelude::IsomorphicApp;
 use render::RenderMode;
 use tokio::net::UnixStream;
 
 use crate::client::run_client;
 use crate::daemon::run_daemon;
 use crate::ipc::SOCKET_PATH;
+use crate::message::Message;
+use crate::replicon::{ConnectionPlugin, SharedReplicationPlugin};
+use crate::status::StatusFeature;
 
 #[derive(Parser)]
 #[command(about = "ECS-driven container orchestration demo")]
@@ -43,6 +47,14 @@ struct Cli {
 pub enum Command {
     Up,
     Status,
+}
+
+pub fn create_isomorphic_app() -> IsomorphicApp<Message, Command> {
+    let mut iso = IsomorphicApp::new();
+    iso.add_plugin(SharedReplicationPlugin);
+    iso.add_plugin(ConnectionPlugin);
+    iso.add_scoped_plugin(StatusFeature);
+    iso
 }
 
 fn resolve_render_mode(explicit: Option<RenderMode>) -> RenderMode {
@@ -87,7 +99,7 @@ async fn main() {
     let cli = Cli::parse();
 
     if cli.daemon {
-        run_daemon().await;
+        run_daemon(create_isomorphic_app()).await;
     } else {
         let mode = resolve_render_mode(cli.output);
         let command = cli.command.unwrap_or(Command::Up);
@@ -107,6 +119,6 @@ async fn main() {
             }
         }
 
-        run_client(mode, &command).await;
+        run_client(create_isomorphic_app(), mode, command).await;
     }
 }
