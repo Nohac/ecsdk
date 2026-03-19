@@ -8,6 +8,7 @@ Provides reusable `ecsdk_*` crates that handle the plumbing between async tasks 
 
 | Crate | Description |
 |---|---|
+| `ecsdk` | Meta crate for using all other crayes
 | `ecsdk_core` | Foundational types: `CmdQueue`, `MessageQueue<M>`, `ApplyMessage` trait, signals, `AppExit` |
 | `ecsdk_app` | Application bootstrap: `setup<M>()`, `run_async<M>()` with biased select loop |
 | `ecsdk_tasks` | Entity-scoped async tasks: `SpawnTask<M>`, `SpawnCmdTask`, `TaskQueue<M>` |
