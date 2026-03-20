@@ -58,9 +58,12 @@ fn detect_disconnect(
 // ClientPlugin — bundles all client-side registration
 // ---------------------------------------------------------------------------
 
-pub struct ClientPlugin(pub RenderMode);
+pub struct ComposeClientPlugin {
+    pub mode: RenderMode,
+    pub command: crate::Command,
+}
 
-impl Plugin for ClientPlugin {
+impl Plugin for ComposeClientPlugin {
     fn build(&self, app: &mut App) {
         // Tracing → LogBuffer drain
         app.add_systems(
@@ -69,26 +72,18 @@ impl Plugin for ClientPlugin {
                 .run_if(resource_exists::<ecsdk::tracing::TracingReceiver>),
         );
 
-        // Rendering
-        app.add_plugins(CrosstermPlugin::new(self.0));
-        app.init_resource::<MergedLogView>();
+        match self.command {
+            crate::Command::Up => {
+                app.add_plugins(CrosstermPlugin::new(self.mode));
+                app.init_resource::<MergedLogView>();
+                app.add_observer(on_remote_added);
+                app.add_observer(on_log_event);
+                app.add_observer(on_server_exit);
+                app.add_observer(on_ctrl_c);
+            }
+            crate::Command::Status => {}
+        }
 
-        // Observers
-        app.add_observer(on_remote_added);
-        app.add_observer(on_log_event);
-        app.add_observer(on_server_exit);
-        app.add_observer(on_ctrl_c);
-
-        // Disconnect detection
-        app.add_systems(Update, detect_disconnect);
-    }
-}
-
-pub struct StatusPlugin;
-
-impl Plugin for StatusPlugin {
-    fn build(&self, app: &mut App) {
-        // Disconnect detection
         app.add_systems(Update, detect_disconnect);
     }
 }
@@ -97,11 +92,7 @@ impl Plugin for StatusPlugin {
 // Entry point
 // ---------------------------------------------------------------------------
 
-pub fn build_client_app(
-    iso: IsomorphicApp<Message, crate::Command>,
-    mode: RenderMode,
-    com: crate::Command,
-) -> (App, ecsdk::app::Receivers<Message>) {
+pub async fn run_client(iso: IsomorphicApp<Message, crate::Command>, mode: RenderMode, com: crate::Command) {
     let mut app = iso.build_client(com);
 
     let wake = app.world().resource::<WakeSignal>().clone();
@@ -112,16 +103,8 @@ pub fn build_client_app(
         ))
         .init();
     app.add_plugins(ecsdk::tracing::TracingPlugin::new(tracing_receiver));
+    app.add_plugins(ComposeClientPlugin { mode, command: com });
 
-    match com {
-        crate::Command::Up => app.add_plugins(ClientPlugin(mode)),
-        crate::Command::Status => app.add_plugins(StatusPlugin),
-    };
-
-    app.into_parts()
-}
-
-pub async fn run_client(iso: IsomorphicApp<Message, crate::Command>, mode: RenderMode, com: crate::Command) {
-    let (mut app, rx) = build_client_app(iso, mode, com);
+    let (mut app, rx) = app.into_parts();
     ecsdk::app::run_async(&mut app, rx).await;
 }

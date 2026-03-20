@@ -54,9 +54,9 @@ fn handle_shutdown_request(
 // DaemonPlugin — bundles all server-side registration
 // ---------------------------------------------------------------------------
 
-pub struct DaemonPlugin;
+pub struct ComposeServerPlugin;
 
-impl Plugin for DaemonPlugin {
+impl Plugin for ComposeServerPlugin {
     fn build(&self, app: &mut App) {
         // Lifecycle + log/exit broadcast
         app.add_plugins(LifecyclePlugin);
@@ -70,6 +70,35 @@ impl Plugin for DaemonPlugin {
 
         // Ctrl+C triggers graceful shutdown
         app.add_systems(Startup, spawn_ctrl_c_handler);
+
+        let containers = [
+            ("postgres", "postgres:16", 0),
+            ("redis", "redis:7", 0),
+            ("api-server", "myapp/api:latest", 1),
+            ("web-frontend", "myapp/web:latest", 2),
+        ];
+
+        let state_queue = app.world().resource::<MessageQueue<Message>>().clone();
+        for (name, image, order) in containers {
+            state_queue.send(Message::SpawnContainer {
+                name: name.into(),
+                image: image.into(),
+                start_order: order,
+            });
+        }
+
+        let mut orchestrator = app.world_mut().spawn((build_orchestrator_sm(),));
+        OrchestratorPhase::Deploying.insert_marker_world(&mut orchestrator);
+
+        app.world_mut().spawn((
+            ContainerName("[system]".into()),
+            LogBuffer::default(),
+            SystemEntity,
+            Replicated,
+        ));
+
+        // Backend factory — attach backends to containers spawned by state events
+        app.add_observer(attach_mock_backend);
     }
 }
 
@@ -84,14 +113,7 @@ fn spawn_ctrl_c_handler(mut commands: Commands) {
 // Entry point
 // ---------------------------------------------------------------------------
 
-pub fn build_server_app(iso: IsomorphicApp<Message, crate::Command>) -> (App, ecsdk::app::Receivers<Message>) {
-    let containers = [
-        ("postgres", "postgres:16", 0),
-        ("redis", "redis:7", 0),
-        ("api-server", "myapp/api:latest", 1),
-        ("web-frontend", "myapp/web:latest", 2),
-    ];
-
+pub async fn run_daemon(iso: IsomorphicApp<Message, crate::Command>) {
     let mut app = iso.build_server(crate::Command::Up);
 
     let wake = app.world().resource::<WakeSignal>().clone();
@@ -102,36 +124,9 @@ pub fn build_server_app(iso: IsomorphicApp<Message, crate::Command>) -> (App, ec
         ))
         .init();
     app.add_plugins(ecsdk::tracing::TracingPlugin::new(tracing_receiver));
+    app.add_plugins(ComposeServerPlugin);
 
-    app.add_plugins(DaemonPlugin);
-
-    let state_queue = app.world().resource::<MessageQueue<Message>>().clone();
-    for (name, image, order) in containers {
-        state_queue.send(Message::SpawnContainer {
-            name: name.into(),
-            image: image.into(),
-            start_order: order,
-        });
-    }
-
-    let mut orchestrator = app.world_mut().spawn((build_orchestrator_sm(),));
-    OrchestratorPhase::Deploying.insert_marker_world(&mut orchestrator);
-
-    app.world_mut().spawn((
-        ContainerName("[system]".into()),
-        LogBuffer::default(),
-        SystemEntity,
-        Replicated,
-    ));
-
-    // Backend factory — attach backends to containers spawned by state events
-    app.add_observer(attach_mock_backend);
-
-    app.into_parts()
-}
-
-pub async fn run_daemon(iso: IsomorphicApp<Message, crate::Command>) {
-    let (mut app, rx) = build_server_app(iso);
+    let (mut app, rx) = app.into_parts();
     ecsdk::app::run_async(&mut app, rx).await;
 
     let _ = std::fs::remove_file(crate::ipc::SOCKET_PATH);

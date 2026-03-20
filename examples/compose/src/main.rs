@@ -57,6 +57,62 @@ pub fn create_isomorphic_app() -> IsomorphicApp<Message, Command> {
     iso
 }
 
+struct ClientLaunch {
+    mode: RenderMode,
+    command: Command,
+}
+
+enum Launch {
+    Daemon,
+    Client(ClientLaunch),
+}
+
+impl Cli {
+    fn into_launch(self) -> Launch {
+        if self.daemon {
+            Launch::Daemon
+        } else {
+            Launch::Client(ClientLaunch {
+                mode: resolve_render_mode(self.output),
+                command: self.command.unwrap_or(Command::Up),
+            })
+        }
+    }
+}
+
+impl ClientLaunch {
+    async fn prepare(self) -> Self {
+        match self.command {
+            Command::Up => {
+                if !daemon_is_running().await {
+                    spawn_daemon().await;
+                }
+            }
+            Command::Status => {
+                if !daemon_is_running().await {
+                    eprintln!("compose status requires a running daemon. Start it with `compose up`.");
+                    std::process::exit(1);
+                }
+            }
+        }
+
+        self
+    }
+
+    async fn run(self) {
+        run_client(create_isomorphic_app(), self.mode, self.command).await;
+    }
+}
+
+impl Launch {
+    async fn run(self) {
+        match self {
+            Launch::Daemon => run_daemon(create_isomorphic_app()).await,
+            Launch::Client(client) => client.prepare().await.run().await,
+        }
+    }
+}
+
 fn resolve_render_mode(explicit: Option<RenderMode>) -> RenderMode {
     explicit.unwrap_or_else(|| {
         if std::io::stdout().is_terminal() {
@@ -96,29 +152,5 @@ async fn spawn_daemon() {
 
 #[tokio::main]
 async fn main() {
-    let cli = Cli::parse();
-
-    if cli.daemon {
-        run_daemon(create_isomorphic_app()).await;
-    } else {
-        let mode = resolve_render_mode(cli.output);
-        let command = cli.command.unwrap_or(Command::Up);
-
-        match command {
-            Command::Up => {
-                // Auto-spawn daemon if not already running
-                if !daemon_is_running().await {
-                    spawn_daemon().await;
-                }
-            }
-            Command::Status => {
-                if !daemon_is_running().await {
-                    eprintln!("compose status requires a running daemon. Start it with `compose up`.");
-                    std::process::exit(1);
-                }
-            }
-        }
-
-        run_client(create_isomorphic_app(), mode, command).await;
-    }
+    Cli::parse().into_launch().run().await;
 }
