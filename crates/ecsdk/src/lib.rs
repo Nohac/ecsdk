@@ -1,15 +1,15 @@
 pub use bevy;
-#[cfg(feature = "replicon")]
+#[cfg(feature = "network")]
 pub use bevy_replicon;
 #[cfg(feature = "app")]
 pub use ecsdk_app as app;
 pub use ecsdk_core as core;
 #[cfg(feature = "macros")]
 pub use ecsdk_macros as macros;
-#[cfg(feature = "replicon")]
-pub use ecsdk_replicon as replicon;
-#[cfg(feature = "replicon")]
-pub use ecsdk_replicon_transport as replicon_transport;
+#[cfg(feature = "network")]
+pub use ecsdk_network as network;
+#[cfg(feature = "network")]
+pub use ecsdk_transport as transport;
 #[cfg(feature = "tasks")]
 pub use ecsdk_tasks as tasks;
 #[cfg(feature = "term")]
@@ -30,11 +30,11 @@ pub mod prelude {
     #[cfg(feature = "macros")]
     pub use ecsdk_macros::{ClientRequest, StateComponent};
 
-    #[cfg(feature = "replicon")]
+    #[cfg(feature = "network")]
     pub use bevy_replicon::prelude::*;
 
-    #[cfg(feature = "replicon")]
-    pub use ecsdk_replicon::{
+    #[cfg(feature = "network")]
+    pub use ecsdk_network::{
         AppRole, ClientRequest, InitialConnection, IsomorphicApp,
         IsomorphicAppExt, IsomorphicPlugin, RequestPlugin,
     };

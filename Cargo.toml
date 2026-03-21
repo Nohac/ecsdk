@@ -6,8 +6,8 @@ members = [
     "crates/ecsdk_app",
     "crates/ecsdk_tasks",
     "crates/ecsdk_term",
-    "crates/ecsdk_replicon",
-    "crates/ecsdk_replicon_transport",
+    "crates/ecsdk_network",
+    "crates/ecsdk_transport",
     "crates/ecsdk_tracing",
     "examples/compose",
 ]
@@ -21,8 +21,8 @@ ecsdk_macros = { path = "crates/ecsdk_macros" }
 ecsdk_app = { path = "crates/ecsdk_app" }
 ecsdk_tasks = { path = "crates/ecsdk_tasks" }
 ecsdk_term = { path = "crates/ecsdk_term" }
-ecsdk_replicon = { path = "crates/ecsdk_replicon" }
-ecsdk_replicon_transport = { path = "crates/ecsdk_replicon_transport" }
+ecsdk_network = { path = "crates/ecsdk_network" }
+ecsdk_transport = { path = "crates/ecsdk_transport" }
 ecsdk_tracing = { path = "crates/ecsdk_tracing" }
 
 # External

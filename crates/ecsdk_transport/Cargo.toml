@@ -1,5 +1,5 @@
 [package]
-name = "ecsdk_replicon_transport"
+name = "ecsdk_transport"
 version = "0.1.0"
 edition = "2024"
 

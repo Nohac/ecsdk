@@ -8,13 +8,13 @@ Provides reusable `ecsdk_*` crates that handle the plumbing between async tasks 
 
 | Crate | Description |
 |---|---|
-| `ecsdk` | Meta crate for using all other crayes
+| `ecsdk` | Meta crate that re-exports the framework crates and common prelude imports |
 | `ecsdk_core` | Foundational types: `CmdQueue`, `MessageQueue<M>`, `ApplyMessage` trait, signals, `AppExit` |
 | `ecsdk_app` | Application bootstrap: `setup<M>()`, `run_async<M>()` with biased select loop |
 | `ecsdk_tasks` | Entity-scoped async tasks: `SpawnTask<M>`, `SpawnCmdTask`, `TaskQueue<M>` |
 | `ecsdk_term` | Terminal integration: raw mode, alternate screen, resize handling, `TerminalGuard` |
-| `ecsdk_replicon` | Bevy Replicon ECS integration: `AcceptClientCmd<S>`, `ConnectClientCmd<S>`, transport plugins |
-| `ecsdk_replicon_transport` | Pure async transport (no bevy dep): `RepliconPacket`, `run_bridge()` over any `AsyncRead + AsyncWrite` |
+| `ecsdk_network` | Networked app composition on top of Bevy Replicon: transport plugins, isomorphic app/plugin helpers, request/response patterns |
+| `ecsdk_transport` | Pure async transport (no bevy dep): `RepliconPacket`, `run_bridge()` over any `AsyncRead + AsyncWrite` |
 | `ecsdk_tracing` | Tracing-to-ECS bridge: captures `tracing` events and routes them into the ECS via entity-scoped spans |
 
 ## Example: `compose`

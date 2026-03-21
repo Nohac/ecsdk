@@ -1750,11 +1750,11 @@ dependencies = [
  "ecsdk_app",
  "ecsdk_core",
  "ecsdk_macros",
- "ecsdk_replicon",
- "ecsdk_replicon_transport",
+ "ecsdk_network",
  "ecsdk_tasks",
  "ecsdk_term",
  "ecsdk_tracing",
+ "ecsdk_transport",
  "serde",
 ]
 
@@ -1787,26 +1787,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "ecsdk_replicon"
+name = "ecsdk_network"
 version = "0.1.0"
 dependencies = [
  "bevy",
  "bevy_replicon",
  "ecsdk_app",
  "ecsdk_core",
- "ecsdk_replicon_transport",
  "ecsdk_tasks",
+ "ecsdk_transport",
  "serde",
  "tokio",
-]
-
-[[package]]
-name = "ecsdk_replicon_transport"
-version = "0.1.0"
-dependencies = [
- "futures-util",
- "tokio",
- "tokio-util",
 ]
 
 [[package]]
@@ -1839,6 +1830,15 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "ecsdk_transport"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]

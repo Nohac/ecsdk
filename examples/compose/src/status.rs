@@ -17,7 +17,7 @@ pub struct StatusFeature;
 
 impl RequestPlugin for StatusFeature {
     type Request = StatusRequest;
-    type Trigger = ecsdk::replicon::InitialConnection;
+    type Trigger = ecsdk::network::InitialConnection;
 
     fn auto_register_client() -> bool {
         false

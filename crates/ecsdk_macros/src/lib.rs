@@ -164,7 +164,7 @@ fn expand_client_request(input: &DeriveInput) -> syn::Result<proc_macro2::TokenS
     let response = find_request_response(input)?;
 
     Ok(quote! {
-        impl #ecsdk::replicon::ClientRequest for #ident {
+        impl #ecsdk::network::ClientRequest for #ident {
             type Response = #response;
         }
 
@@ -174,7 +174,7 @@ fn expand_client_request(input: &DeriveInput) -> syn::Result<proc_macro2::TokenS
                 for<'a> <Self as #ecsdk::bevy::prelude::Event>::Trigger<'a>: Default,
                 for<'a> <#response as #ecsdk::bevy::prelude::Event>::Trigger<'a>: Default,
             {
-                <Self as #ecsdk::replicon::ClientRequest>::register(app);
+                <Self as #ecsdk::network::ClientRequest>::register(app);
             }
 
             pub fn reply(
@@ -182,7 +182,7 @@ fn expand_client_request(input: &DeriveInput) -> syn::Result<proc_macro2::TokenS
                 client_id: #ecsdk::bevy_replicon::prelude::ClientId,
                 response: #response,
             ) {
-                <Self as #ecsdk::replicon::ClientRequest>::reply(commands, client_id, response);
+                <Self as #ecsdk::network::ClientRequest>::reply(commands, client_id, response);
             }
         }
     })

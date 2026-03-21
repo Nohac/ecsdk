@@ -10,7 +10,7 @@ mod protocol;
 mod render;
 #[cfg(test)]
 mod replay;
-mod replicon;
+mod network;
 mod status;
 
 use std::io::IsTerminal;
@@ -28,7 +28,7 @@ use crate::client::{run_status, run_up};
 use crate::daemon::run_daemon;
 use crate::ipc::SOCKET_PATH;
 use crate::message::Message;
-use crate::replicon::{ConnectionPlugin, SharedReplicationPlugin};
+use crate::network::{ConnectionPlugin, SharedReplicationPlugin};
 use crate::status::StatusFeature;
 
 #[derive(Parser)]
@@ -57,7 +57,7 @@ pub fn create_isomorphic_app() -> IsomorphicApp<Message> {
     iso.add_plugin(SharedReplicationPlugin);
     iso.add_plugin(ConnectionPlugin);
     iso.add_plugin(StatusFeature);
-    iso.add_plugin(TracingPlugin);
+    iso.add_plugin(TracingInitPlugin);
     iso
 }
 
@@ -111,9 +111,9 @@ async fn ensure_daemon(auto_spawn: bool) {
     }
 }
 
-struct TracingPlugin;
+struct TracingInitPlugin;
 
-impl IsomorphicPlugin for TracingPlugin {
+impl IsomorphicPlugin for TracingInitPlugin {
     fn build_shared(&self, app: &mut ecsdk::prelude::App) {
         let wake = app.world().resource::<WakeSignal>().clone();
         let (tracing_layer, tracing_receiver) = ecsdk::tracing::setup(wake);

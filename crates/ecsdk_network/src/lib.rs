@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc;
 
-pub use ecsdk_replicon_transport::{RepliconPacket, run_bridge};
+pub use ecsdk_transport::{RepliconPacket, run_bridge};
 
 #[derive(Component, Serialize, Deserialize)]
 pub struct ConnectionStateEntity;

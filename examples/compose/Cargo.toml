@@ -8,7 +8,7 @@ name = "compose"
 path = "src/main.rs"
 
 [dependencies]
-ecsdk = { workspace = true, features = ["app", "tasks", "term", "replicon", "tracing", "macros"] }
+ecsdk = { workspace = true, features = ["app", "tasks", "term", "network", "tracing", "macros"] }
 
 bevy = { workspace = true, features = ["bevy_state", "serialize"] }
 seldom_state = { workspace = true }

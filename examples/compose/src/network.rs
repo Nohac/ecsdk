@@ -61,7 +61,7 @@ pub fn spawn_server_listener(mut commands: Commands) {
                 };
 
                 cmd.send(move |world: &mut World| {
-                    ecsdk::replicon::AcceptClientCmd { stream }.apply(world);
+                    ecsdk::network::AcceptClientCmd { stream }.apply(world);
                 })
                 .wake();
             }
@@ -79,7 +79,7 @@ pub fn spawn_client_connection(mut commands: Commands) {
             match crate::ipc::connect().await {
                 Ok(stream) => {
                     cmd.send(move |world: &mut World| {
-                        ecsdk::replicon::ConnectClientCmd { stream }.apply(world);
+                        ecsdk::network::ConnectClientCmd { stream }.apply(world);
                     })
                     .wake();
                 }

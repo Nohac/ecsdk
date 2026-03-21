@@ -22,7 +22,7 @@ Cargo workspace providing reusable `ecsdk_*` crates for building async ECS appli
 - **`crates/ecsdk_app`** — Application bootstrap: `Receivers<M>`, `setup<M>()`, `run_async<M>()`
 - **`crates/ecsdk_tasks`** — Entity-scoped async tasks: `AsyncTask`, `TaskQueue<M>`, `SpawnTask<M>`, `CmdOnly`, `SpawnCmdTask`
 - **`crates/ecsdk_term`** — Terminal integration: `TerminalSize`, `TerminalEvent`, `TerminalGuard`, `Rect`, `TermPlugin`
-- **`crates/ecsdk_replicon`** — Replicon transport: `RepliconPacket`, `run_bridge()`, `ServerBridge`, `ClientBridge`, transport plugins
+- **`crates/ecsdk_network`** — Networked Bevy/Replicon integration: transport plugins, `IsomorphicApp`, request/response helpers
 - **`examples/compose`** — Container orchestration demo using all ecsdk crates
 
 ## Rust Conventions

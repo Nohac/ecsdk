@@ -8,7 +8,8 @@ default = []
 app = ["dep:ecsdk_app"]
 tasks = ["dep:ecsdk_tasks"]
 term = ["dep:ecsdk_term"]
-replicon = ["dep:ecsdk_replicon", "dep:ecsdk_replicon_transport", "dep:bevy_replicon"]
+network = ["dep:ecsdk_network", "dep:ecsdk_transport", "dep:bevy_replicon"]
+replicon = ["network"]
 tracing = ["dep:ecsdk_tracing"]
 macros = ["dep:ecsdk_macros"]
 
@@ -19,8 +20,8 @@ ecsdk_core = { workspace = true }
 ecsdk_app = { workspace = true, optional = true }
 ecsdk_tasks = { workspace = true, optional = true }
 ecsdk_term = { workspace = true, optional = true }
-ecsdk_replicon = { workspace = true, optional = true }
-ecsdk_replicon_transport = { workspace = true, optional = true }
+ecsdk_network = { workspace = true, optional = true }
+ecsdk_transport = { workspace = true, optional = true }
 ecsdk_tracing = { workspace = true, optional = true }
 ecsdk_macros = { workspace = true, optional = true }
 serde = { workspace = true }
