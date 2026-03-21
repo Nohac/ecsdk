@@ -85,14 +85,14 @@ impl Plugin for ComposeClientPlugin {
 // ---------------------------------------------------------------------------
 
 pub fn run_up(
-    mut app: BuiltIsomorphicApp<Message>,
+    mut app: AsyncApp<Message>,
     mode: RenderMode,
-) -> BuiltIsomorphicApp<Message> {
+) -> AsyncApp<Message> {
     app.add_plugins(ComposeClientPlugin { mode });
     app
 }
 
-pub fn run_status(mut app: BuiltIsomorphicApp<Message>) -> BuiltIsomorphicApp<Message> {
+pub fn run_status(mut app: AsyncApp<Message>) -> AsyncApp<Message> {
     StatusFeature::register_client(&mut app);
     app
 }

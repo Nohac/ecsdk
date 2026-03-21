@@ -25,7 +25,7 @@ pub mod prelude {
     pub use ecsdk_core::{AppExit, ApplyMessage, MessageQueue, ScheduleControl, WakeSignal};
 
     #[cfg(feature = "app")]
-    pub use ecsdk_app::{Receivers, run_async, setup};
+    pub use ecsdk_app::{AsyncApp, Receivers, run_async, setup};
 
     #[cfg(feature = "macros")]
     pub use ecsdk_macros::{ClientRequest, StateComponent};
@@ -35,7 +35,7 @@ pub mod prelude {
 
     #[cfg(feature = "replicon")]
     pub use ecsdk_replicon::{
-        AppRole, BuiltIsomorphicApp, ClientRequest, InitialConnection, IsomorphicApp,
+        AppRole, ClientRequest, InitialConnection, IsomorphicApp,
         IsomorphicAppExt, IsomorphicPlugin, RequestPlugin,
     };
 }

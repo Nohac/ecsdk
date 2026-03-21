@@ -1,12 +1,9 @@
 use std::collections::HashMap;
 
 use ecsdk::prelude::*;
-use ecsdk::core::{AppExit, MessageQueue, WakeSignal};
+use ecsdk::core::{AppExit, MessageQueue};
 use ecsdk::tasks::SpawnTask;
 use tokio::signal::ctrl_c;
-use tracing_subscriber::Layer as _;
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::util::SubscriberInitExt;
 
 use crate::backend_mock::MockBackend;
 use crate::container::*;
@@ -113,24 +110,9 @@ fn spawn_ctrl_c_handler(mut commands: Commands) {
 // Entry point
 // ---------------------------------------------------------------------------
 
-pub async fn run_daemon(iso: IsomorphicApp<Message>) {
-    let mut app = iso.build_server();
-
-    let wake = app.world().resource::<WakeSignal>().clone();
-    let (tracing_layer, tracing_receiver) = ecsdk::tracing::setup(wake);
-    tracing_subscriber::registry()
-        .with(tracing_layer.with_filter(
-            tracing_subscriber::filter::Targets::new().with_target("compose", tracing::Level::INFO),
-        ))
-        .init();
-    app.add_plugins(ecsdk::tracing::TracingPlugin::new(tracing_receiver));
+pub fn run_daemon(mut app: AsyncApp<Message>) -> AsyncApp<Message> {
     app.add_plugins(ComposeServerPlugin);
-
-    let (mut app, rx) = app.into_parts();
-    ecsdk::app::run_async(&mut app, rx).await;
-
-    let _ = std::fs::remove_file(crate::ipc::SOCKET_PATH);
-    tracing::info!("Daemon shut down");
+    app
 }
 
 fn attach_mock_backend(

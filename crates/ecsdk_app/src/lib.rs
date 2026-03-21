@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use std::time::Duration;
+use std::ops::{Deref, DerefMut};
 
 use bevy::app::App;
 use bevy::ecs::prelude::World;
@@ -17,7 +18,12 @@ pub struct Receivers<M: ApplyMessage> {
     wake: Arc<Notify>,
 }
 
-pub fn setup<M: ApplyMessage>() -> (App, Receivers<M>) {
+pub struct AsyncApp<M: ApplyMessage> {
+    app: App,
+    receivers: Receivers<M>,
+}
+
+pub fn setup<M: ApplyMessage>() -> AsyncApp<M> {
     let (state_tx, state_rx) = mpsc::unbounded_channel();
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let tick = Arc::new(Notify::new());
@@ -34,15 +40,39 @@ pub fn setup<M: ApplyMessage>() -> (App, Receivers<M>) {
     app.insert_resource(WakeSignal(wake.clone()));
     app.init_resource::<AppExit>();
 
-    (
+    AsyncApp {
         app,
-        Receivers {
+        receivers: Receivers {
             state_rx,
             cmd_rx,
             tick,
             wake,
         },
-    )
+    }
+}
+
+impl<M: ApplyMessage> AsyncApp<M> {
+    pub fn into_parts(self) -> (App, Receivers<M>) {
+        (self.app, self.receivers)
+    }
+
+    pub async fn run(mut self) {
+        run_async(&mut self.app, self.receivers).await;
+    }
+}
+
+impl<M: ApplyMessage> Deref for AsyncApp<M> {
+    type Target = App;
+
+    fn deref(&self) -> &Self::Target {
+        &self.app
+    }
+}
+
+impl<M: ApplyMessage> DerefMut for AsyncApp<M> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.app
+    }
 }
 
 pub async fn run_async<M: ApplyMessage>(app: &mut App, mut rx: Receivers<M>) {

@@ -1,11 +1,10 @@
 use std::collections::HashMap;
-use std::ops::{Deref, DerefMut};
 
 use bevy::app::prelude::*;
 use bevy::ecs::prelude::*;
 use bevy::state::prelude::*;
 use bevy_replicon::prelude::*;
-use ecsdk_app::Receivers;
+use ecsdk_app::AsyncApp;
 use ecsdk_core::ApplyMessage;
 use ecsdk_tasks::SpawnCmdTask;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -40,11 +39,6 @@ pub struct IsomorphicApp<M: ApplyMessage> {
     marker: std::marker::PhantomData<M>,
 }
 
-pub struct BuiltIsomorphicApp<M: ApplyMessage> {
-    app: App,
-    receivers: Receivers<M>,
-}
-
 impl<M: ApplyMessage> IsomorphicApp<M> {
     pub fn new() -> Self {
         Self {
@@ -58,16 +52,16 @@ impl<M: ApplyMessage> IsomorphicApp<M> {
         self
     }
 
-    pub fn build_server(self) -> BuiltIsomorphicApp<M> {
+    pub fn build_server(self) -> AsyncApp<M> {
         self.build(AppRole::Server)
     }
 
-    pub fn build_client(self) -> BuiltIsomorphicApp<M> {
+    pub fn build_client(self) -> AsyncApp<M> {
         self.build(AppRole::Client)
     }
 
-    fn build(self, role: AppRole) -> BuiltIsomorphicApp<M> {
-        let (mut app, receivers) = ecsdk_app::setup::<M>();
+    fn build(self, role: AppRole) -> AsyncApp<M> {
+        let mut app = ecsdk_app::setup::<M>();
         match role {
             AppRole::Server => app.add_plugins(ServerRepliconPlugin),
             AppRole::Client => app.add_plugins(ClientRepliconPlugin),
@@ -80,37 +74,13 @@ impl<M: ApplyMessage> IsomorphicApp<M> {
             }
         }
 
-        BuiltIsomorphicApp { app, receivers }
+        app
     }
 }
 
 impl<M: ApplyMessage> Default for IsomorphicApp<M> {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl<M: ApplyMessage> BuiltIsomorphicApp<M> {
-    pub fn into_parts(self) -> (App, Receivers<M>) {
-        (self.app, self.receivers)
-    }
-
-    pub async fn run(mut self) {
-        ecsdk_app::run_async(&mut self.app, self.receivers).await;
-    }
-}
-
-impl<M: ApplyMessage> Deref for BuiltIsomorphicApp<M> {
-    type Target = App;
-
-    fn deref(&self) -> &Self::Target {
-        &self.app
-    }
-}
-
-impl<M: ApplyMessage> DerefMut for BuiltIsomorphicApp<M> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.app
     }
 }
 
