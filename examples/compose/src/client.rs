@@ -1,11 +1,8 @@
 use bevy::state::prelude::*;
 use crossterm::event::{Event, KeyCode, KeyModifiers};
+use ecsdk::core::AppExit;
 use ecsdk::prelude::*;
-use ecsdk::core::{AppExit, WakeSignal};
 use ecsdk::term::TerminalEvent;
-use tracing_subscriber::Layer as _;
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::util::SubscriberInitExt;
 
 use crate::container::*;
 use crate::message::Message;
@@ -61,7 +58,6 @@ fn detect_disconnect(
 
 pub struct ComposeClientPlugin {
     pub mode: RenderMode,
-    pub command: crate::Command,
 }
 
 impl Plugin for ComposeClientPlugin {
@@ -73,17 +69,12 @@ impl Plugin for ComposeClientPlugin {
                 .run_if(resource_exists::<ecsdk::tracing::TracingReceiver>),
         );
 
-        match self.command {
-            crate::Command::Up => {
-                app.add_plugins(CrosstermPlugin::new(self.mode));
-                app.init_resource::<MergedLogView>();
-                app.add_observer(on_remote_added);
-                app.add_observer(on_log_event);
-                app.add_observer(on_server_exit);
-                app.add_observer(on_ctrl_c);
-            }
-            crate::Command::Status => {}
-        }
+        app.add_plugins(CrosstermPlugin::new(self.mode));
+        app.init_resource::<MergedLogView>();
+        app.add_observer(on_remote_added);
+        app.add_observer(on_log_event);
+        app.add_observer(on_server_exit);
+        app.add_observer(on_ctrl_c);
 
         app.add_systems(Update, detect_disconnect);
     }
@@ -93,22 +84,15 @@ impl Plugin for ComposeClientPlugin {
 // Entry point
 // ---------------------------------------------------------------------------
 
-pub async fn run_client(iso: IsomorphicApp<Message>, mode: RenderMode, com: crate::Command) {
-    let mut app = iso.build_client();
+pub fn run_up(
+    mut app: BuiltIsomorphicApp<Message>,
+    mode: RenderMode,
+) -> BuiltIsomorphicApp<Message> {
+    app.add_plugins(ComposeClientPlugin { mode });
+    app
+}
 
-    let wake = app.world().resource::<WakeSignal>().clone();
-    let (tracing_layer, tracing_receiver) = ecsdk::tracing::setup(wake);
-    tracing_subscriber::registry()
-        .with(tracing_layer.with_filter(
-            tracing_subscriber::filter::Targets::new().with_target("compose", tracing::Level::INFO),
-        ))
-        .init();
-    app.add_plugins(ecsdk::tracing::TracingPlugin::new(tracing_receiver));
-    app.add_plugins(ComposeClientPlugin { mode, command: com });
-    if matches!(com, crate::Command::Status) {
-        StatusFeature::register_client(&mut app);
-    }
-
-    let (mut app, rx) = app.into_parts();
-    ecsdk::app::run_async(&mut app, rx).await;
+pub fn run_status(mut app: BuiltIsomorphicApp<Message>) -> BuiltIsomorphicApp<Message> {
+    StatusFeature::register_client(&mut app);
+    app
 }
