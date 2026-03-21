@@ -113,8 +113,8 @@ fn spawn_ctrl_c_handler(mut commands: Commands) {
 // Entry point
 // ---------------------------------------------------------------------------
 
-pub async fn run_daemon(iso: IsomorphicApp<Message, crate::Command>) {
-    let mut app = iso.build_server(crate::Command::Up);
+pub async fn run_daemon(iso: IsomorphicApp<Message>) {
+    let mut app = iso.build_server();
 
     let wake = app.world().resource::<WakeSignal>().clone();
     let (tracing_layer, tracing_receiver) = ecsdk::tracing::setup(wake);

@@ -49,11 +49,11 @@ pub enum Command {
     Status,
 }
 
-pub fn create_isomorphic_app() -> IsomorphicApp<Message, Command> {
+pub fn create_isomorphic_app() -> IsomorphicApp<Message> {
     let mut iso = IsomorphicApp::new();
     iso.add_plugin(SharedReplicationPlugin);
     iso.add_plugin(ConnectionPlugin);
-    iso.add_scoped_plugin(StatusFeature);
+    iso.add_plugin(StatusFeature);
     iso
 }
 

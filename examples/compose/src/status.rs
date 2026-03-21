@@ -15,12 +15,12 @@ pub struct StatusResponse {
 
 pub struct StatusFeature;
 
-impl RequestPlugin<crate::Command> for StatusFeature {
+impl RequestPlugin for StatusFeature {
     type Request = StatusRequest;
     type Trigger = ecsdk::replicon::InitialConnection;
 
-    fn client_scope() -> Option<crate::Command> {
-        Some(crate::Command::Status)
+    fn auto_register_client() -> bool {
+        false
     }
 
     fn build_server(app: &mut App) {

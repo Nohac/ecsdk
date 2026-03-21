@@ -11,6 +11,7 @@ use crate::container::*;
 use crate::message::Message;
 use crate::protocol::{LogEvent, ServerExitNotice, ShutdownRequest};
 use crate::render::{CrosstermPlugin, RenderMode};
+use crate::status::StatusFeature;
 
 // ---------------------------------------------------------------------------
 // Client-specific observers and systems
@@ -92,8 +93,8 @@ impl Plugin for ComposeClientPlugin {
 // Entry point
 // ---------------------------------------------------------------------------
 
-pub async fn run_client(iso: IsomorphicApp<Message, crate::Command>, mode: RenderMode, com: crate::Command) {
-    let mut app = iso.build_client(com);
+pub async fn run_client(iso: IsomorphicApp<Message>, mode: RenderMode, com: crate::Command) {
+    let mut app = iso.build_client();
 
     let wake = app.world().resource::<WakeSignal>().clone();
     let (tracing_layer, tracing_receiver) = ecsdk::tracing::setup(wake);
@@ -104,6 +105,9 @@ pub async fn run_client(iso: IsomorphicApp<Message, crate::Command>, mode: Rende
         .init();
     app.add_plugins(ecsdk::tracing::TracingPlugin::new(tracing_receiver));
     app.add_plugins(ComposeClientPlugin { mode, command: com });
+    if matches!(com, crate::Command::Status) {
+        StatusFeature::register_client(&mut app);
+    }
 
     let (mut app, rx) = app.into_parts();
     ecsdk::app::run_async(&mut app, rx).await;

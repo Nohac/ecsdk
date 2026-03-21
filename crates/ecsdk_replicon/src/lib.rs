@@ -35,31 +35,8 @@ pub trait IsomorphicPlugin {
     fn build_client(&self, _app: &mut App) {}
 }
 
-pub trait ScopedIsomorphicPlugin<S>: 'static {
-    fn shared_scope(&self) -> Option<S> {
-        None
-    }
-
-    fn server_scope(&self) -> Option<S> {
-        None
-    }
-
-    fn client_scope(&self) -> Option<S> {
-        None
-    }
-
-    fn build_shared(&self, _app: &mut App) {}
-    fn build_server(&self, _app: &mut App) {}
-    fn build_client(&self, _app: &mut App) {}
-}
-
-enum PluginEntry<S> {
-    Always(Box<dyn IsomorphicPlugin>),
-    Scoped(Box<dyn ScopedIsomorphicPlugin<S>>),
-}
-
-pub struct IsomorphicApp<M: ApplyMessage, S = ()> {
-    plugins: Vec<PluginEntry<S>>,
+pub struct IsomorphicApp<M: ApplyMessage> {
+    plugins: Vec<Box<dyn IsomorphicPlugin>>,
     marker: std::marker::PhantomData<M>,
 }
 
@@ -68,7 +45,7 @@ pub struct BuiltIsomorphicApp<M: ApplyMessage> {
     receivers: Receivers<M>,
 }
 
-impl<M: ApplyMessage, S: Copy + Eq + 'static> IsomorphicApp<M, S> {
+impl<M: ApplyMessage> IsomorphicApp<M> {
     pub fn new() -> Self {
         Self {
             plugins: Vec::new(),
@@ -77,55 +54,29 @@ impl<M: ApplyMessage, S: Copy + Eq + 'static> IsomorphicApp<M, S> {
     }
 
     pub fn add_plugin<P: IsomorphicPlugin + 'static>(&mut self, plugin: P) -> &mut Self {
-        self.plugins.push(PluginEntry::Always(Box::new(plugin)));
+        self.plugins.push(Box::new(plugin));
         self
     }
 
-    pub fn add_scoped_plugin<P: ScopedIsomorphicPlugin<S> + 'static>(&mut self, plugin: P) -> &mut Self {
-        self.plugins.push(PluginEntry::Scoped(Box::new(plugin)));
-        self
+    pub fn build_server(self) -> BuiltIsomorphicApp<M> {
+        self.build(AppRole::Server)
     }
 
-    pub fn build_server(self, scope: S) -> BuiltIsomorphicApp<M> {
-        self.build(AppRole::Server, scope)
+    pub fn build_client(self) -> BuiltIsomorphicApp<M> {
+        self.build(AppRole::Client)
     }
 
-    pub fn build_client(self, scope: S) -> BuiltIsomorphicApp<M> {
-        self.build(AppRole::Client, scope)
-    }
-
-    fn build(self, role: AppRole, scope: S) -> BuiltIsomorphicApp<M> {
+    fn build(self, role: AppRole) -> BuiltIsomorphicApp<M> {
         let (mut app, receivers) = ecsdk_app::setup::<M>();
         match role {
             AppRole::Server => app.add_plugins(ServerRepliconPlugin),
             AppRole::Client => app.add_plugins(ClientRepliconPlugin),
         };
         for plugin in self.plugins {
-            match plugin {
-                PluginEntry::Always(plugin) => {
-                    plugin.build_shared(&mut app);
-                    match role {
-                        AppRole::Server => plugin.build_server(&mut app),
-                        AppRole::Client => plugin.build_client(&mut app),
-                    }
-                }
-                PluginEntry::Scoped(plugin) => {
-                    if plugin.shared_scope().is_none_or(|s| s == scope) {
-                        plugin.build_shared(&mut app);
-                    }
-                    match role {
-                        AppRole::Server => {
-                            if plugin.server_scope().is_none_or(|s| s == scope) {
-                                plugin.build_server(&mut app);
-                            }
-                        }
-                        AppRole::Client => {
-                            if plugin.client_scope().is_none_or(|s| s == scope) {
-                                plugin.build_client(&mut app);
-                            }
-                        }
-                    }
-                }
+            plugin.build_shared(&mut app);
+            match role {
+                AppRole::Server => plugin.build_server(&mut app),
+                AppRole::Client => plugin.build_client(&mut app),
             }
         }
 
@@ -133,7 +84,7 @@ impl<M: ApplyMessage, S: Copy + Eq + 'static> IsomorphicApp<M, S> {
     }
 }
 
-impl<M: ApplyMessage, S: Copy + Eq + 'static> Default for IsomorphicApp<M, S> {
+impl<M: ApplyMessage> Default for IsomorphicApp<M> {
     fn default() -> Self {
         Self::new()
     }
@@ -212,7 +163,7 @@ pub trait ClientRequest: Event + Serialize + DeserializeOwned {
     }
 }
 
-pub trait RequestPlugin<S = ()> {
+pub trait RequestPlugin: 'static {
     type Request: ClientRequest;
     type Trigger: Component;
 
@@ -223,59 +174,65 @@ pub trait RequestPlugin<S = ()> {
         Default::default()
     }
 
-    fn shared_scope() -> Option<S> {
-        None
+    fn auto_register_shared() -> bool { true }
+    fn auto_register_server() -> bool { true }
+    fn auto_register_client() -> bool { true }
+
+    fn register_shared(app: &mut App)
+    where
+        Self::Request: Default,
+        for<'a> <Self::Request as Event>::Trigger<'a>: Default,
+        for<'a> <<Self::Request as ClientRequest>::Response as Event>::Trigger<'a>: Default,
+    {
+        Self::Request::register(app);
     }
 
-    fn server_scope() -> Option<S> {
-        None
+    fn register_server(app: &mut App) {
+        Self::build_server(app);
     }
 
-    fn client_scope() -> Option<S> {
-        None
+    fn register_client(app: &mut App)
+    where
+        Self::Request: Default,
+        Self: Sized,
+    {
+        app.add_observer(send_request_on_trigger::<Self>);
+        Self::build_client(app);
     }
 
     fn build_server(app: &mut App);
     fn build_client(app: &mut App);
 }
 
-impl<T, S> ScopedIsomorphicPlugin<S> for T
+impl<T> IsomorphicPlugin for T
 where
-    T: RequestPlugin<S> + 'static,
-    S: Copy + 'static,
+    T: RequestPlugin + 'static,
     T::Request: Default,
     for<'a> <T::Request as Event>::Trigger<'a>: Default,
     for<'a> <<T::Request as ClientRequest>::Response as Event>::Trigger<'a>: Default,
 {
-    fn shared_scope(&self) -> Option<S> {
-        <T as RequestPlugin<S>>::shared_scope()
-    }
-
-    fn server_scope(&self) -> Option<S> {
-        <T as RequestPlugin<S>>::server_scope()
-    }
-
-    fn client_scope(&self) -> Option<S> {
-        <T as RequestPlugin<S>>::client_scope()
-    }
-
     fn build_shared(&self, app: &mut App) {
-        T::Request::register(app);
+        if T::auto_register_shared() {
+            T::register_shared(app);
+        }
     }
 
     fn build_server(&self, app: &mut App) {
-        T::build_server(app);
+        if T::auto_register_server() {
+            T::register_server(app);
+        }
     }
 
     fn build_client(&self, app: &mut App) {
-        app.add_observer(send_request_on_trigger::<T, S>);
-        T::build_client(app);
+        if T::auto_register_client() {
+            T::register_client(app);
+        }
     }
 }
 
-fn send_request_on_trigger<T, S>(_trigger: On<Add, T::Trigger>, mut commands: Commands)
+fn send_request_on_trigger<T>(_trigger: On<Add, T::Trigger>, mut commands: Commands)
 where
-    T: RequestPlugin<S>,
+    T: RequestPlugin,
     T::Request: Default,
 {
     commands.client_trigger(T::request());
