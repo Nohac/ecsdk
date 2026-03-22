@@ -4,28 +4,14 @@ use ecsdk::core::AppExit;
 use ecsdk::prelude::*;
 use ecsdk::term::TerminalEvent;
 
-use crate::container::*;
 use crate::message::Message;
-use crate::protocol::{LogEvent, ServerExitNotice, ShutdownRequest};
+use crate::protocol::{ServerExitNotice, ShutdownRequest};
 use crate::render::{CrosstermPlugin, RenderMode};
 use crate::status::StatusFeature;
 
 // ---------------------------------------------------------------------------
 // Client-specific observers and systems
 // ---------------------------------------------------------------------------
-
-fn on_remote_added(trigger: On<Add, Remote>, mut commands: Commands) {
-    commands
-        .entity(trigger.event_target())
-        .insert(LogBuffer::default());
-}
-
-fn on_log_event(trigger: On<LogEvent>, mut logs: Query<&mut LogBuffer>) {
-    let event = trigger.event();
-    if let Ok(mut log_buf) = logs.get_mut(event.container_entity) {
-        log_buf.push(&event.text);
-    }
-}
 
 fn on_server_exit(_trigger: On<ServerExitNotice>, mut exit: ResMut<AppExit>) {
     exit.0 = true;
@@ -70,9 +56,6 @@ impl Plugin for ComposeClientPlugin {
         );
 
         app.add_plugins(CrosstermPlugin::new(self.mode));
-        app.init_resource::<MergedLogView>();
-        app.add_observer(on_remote_added);
-        app.add_observer(on_log_event);
         app.add_observer(on_server_exit);
         app.add_observer(on_ctrl_c);
 

@@ -12,15 +12,6 @@ use ecsdk::term::{Rect, TerminalSize, reset_scroll_region, set_scroll_region};
 
 use crate::container::*;
 
-const SERVICE_COLORS: [Color; 6] = [
-    Color::Cyan,
-    Color::Green,
-    Color::Yellow,
-    Color::Magenta,
-    Color::Blue,
-    Color::Red,
-];
-
 fn phase_color(phase: ContainerPhase) -> (Color, Option<Attribute>) {
     match phase {
         ContainerPhase::Pending => (Color::DarkGrey, None),
@@ -32,6 +23,15 @@ fn phase_color(phase: ContainerPhase) -> (Color, Option<Attribute>) {
         ContainerPhase::Failed => (Color::Red, Some(Attribute::Bold)),
     }
 }
+
+const SERVICE_COLORS: [Color; 6] = [
+    Color::Cyan,
+    Color::Green,
+    Color::Yellow,
+    Color::Magenta,
+    Color::Blue,
+    Color::Red,
+];
 
 fn progress_bar(downloaded: u64, total: u64, width: usize) -> String {
     if total == 0 {
@@ -55,24 +55,10 @@ fn progress_bar(downloaded: u64, total: u64, width: usize) -> String {
 pub(super) struct TuiRenderState {
     last_phase: HashMap<Entity, ContainerPhase>,
     last_progress: HashMap<Entity, u64>,
-    log_cursor: usize,
+    last_log_sequence: u64,
     initialized: bool,
-    service_color_map: HashMap<Entity, Color>,
-    next_color_idx: usize,
     last_cols: u16,
     last_rows: u16,
-}
-
-impl TuiRenderState {
-    fn color_for(&mut self, entity: Entity) -> Color {
-        if let Some(&c) = self.service_color_map.get(&entity) {
-            return c;
-        }
-        let c = SERVICE_COLORS[self.next_color_idx % SERVICE_COLORS.len()];
-        self.next_color_idx += 1;
-        self.service_color_map.insert(entity, c);
-        c
-    }
 }
 
 // ── Section renderers ──
@@ -144,42 +130,34 @@ fn render_separator(out: &mut impl Write, rect: Rect) {
     let _ = out.queue(ResetColor);
 }
 
-fn render_log_line(
-    out: &mut impl Write,
-    entry: &MergedLogEntry,
-    row: u16,
-    name_width: usize,
-    cols: usize,
-    svc_color: Color,
-) {
+fn render_log_line(out: &mut impl Write, entry: &LogEntry, row: u16, cols: usize) {
     let _ = out.queue(MoveTo(0, row));
     let _ = out.queue(Clear(ClearType::CurrentLine));
-    let _ = out.queue(SetForegroundColor(svc_color));
-    let _ = out.queue(Print(format!(
-        "  {:<width$}",
-        entry.name,
-        width = name_width
-    )));
-    let _ = out.queue(ResetColor);
-    let _ = out.queue(Print(" | "));
-
-    let prefix_len = 2 + name_width + 3;
-    let max_text = cols.saturating_sub(prefix_len);
-    let text = &entry.line.text;
-    let text = if text.len() > max_text {
-        &text[..max_text]
+    let _ = out.queue(Print("  "));
+    let color = SERVICE_COLORS[entry.color_idx as usize % SERVICE_COLORS.len()];
+    let _ = out.queue(SetForegroundColor(color));
+    let label = &entry.label;
+    let sep = " | ";
+    let reserved = 2 + label.len() + sep.len();
+    let max_text = cols.saturating_sub(reserved);
+    let text = if entry.message.len() > max_text {
+        &entry.message[..max_text]
     } else {
-        text
+        &entry.message
     };
+    let _ = out.queue(Print(label));
+    let _ = out.queue(ResetColor);
+    let _ = out.queue(Print(sep));
+    let _ = out.queue(SetForegroundColor(Color::Grey));
     let _ = out.queue(Print(text));
+    let _ = out.queue(ResetColor);
 }
 
 fn render_logs(
     out: &mut impl Write,
     rect: Rect,
-    logs: &MergedLogView,
+    logs: &[&LogEntry],
     state: &mut TuiRenderState,
-    name_width: usize,
     full: bool,
 ) {
     if rect.h == 0 {
@@ -189,34 +167,28 @@ fn render_logs(
     // Set scroll region to log area (ANSI rows are 1-based)
     set_scroll_region(out, rect.row + 1, rect.row + rect.h);
 
-    // Handle buffer trimming
-    if state.log_cursor > logs.entries.len() {
-        state.log_cursor = logs.entries.len();
-    }
-
     let cols = rect.w as usize;
 
     if full {
         // Bottom-align: draw the last N entries at the bottom of the rect
-        let visible = (rect.h as usize).min(logs.entries.len());
-        let start = logs.entries.len().saturating_sub(visible);
+        let visible = (rect.h as usize).min(logs.len());
+        let start = logs.len().saturating_sub(visible);
         let offset = rect.h - visible as u16;
 
-        for (i, entry) in logs.entries[start..].iter().enumerate() {
+        for (i, entry) in logs[start..].iter().enumerate() {
             let row = rect.row + offset + i as u16;
-            let svc_color = state.color_for(entry.entity);
-            render_log_line(out, entry, row, name_width, cols, svc_color);
+            render_log_line(out, entry, row, cols);
         }
-        state.log_cursor = logs.entries.len();
-    } else if state.log_cursor < logs.entries.len() {
+        state.last_log_sequence = logs.last().map(|e| e.sequence).unwrap_or(0);
+    } else {
         let bottom_row = rect.row + rect.h - 1;
-        for entry in &logs.entries[state.log_cursor..] {
+        let last_seen = state.last_log_sequence;
+        for entry in logs.iter().filter(|entry| entry.sequence > last_seen) {
             let _ = out.queue(MoveTo(0, bottom_row));
             let _ = out.queue(ScrollUp(1));
-            let svc_color = state.color_for(entry.entity);
-            render_log_line(out, entry, bottom_row, name_width, cols, svc_color);
+            render_log_line(out, entry, bottom_row, cols);
+            state.last_log_sequence = entry.sequence;
         }
-        state.log_cursor = logs.entries.len();
     }
 }
 
@@ -231,7 +203,8 @@ pub(super) fn render_tui(
         &ContainerPhase,
         Option<&DownloadProgress>,
     )>,
-    merged_logs: Res<MergedLogView>,
+    log_view: Single<&LogView>,
+    log_entries: Query<&LogEntry>,
     term_size: Res<TerminalSize>,
     mut state: Local<TuiRenderState>,
 ) {
@@ -266,6 +239,11 @@ pub(super) fn render_tui(
     });
     let containers: Vec<_> = containers.into_iter().map(|(_, c)| c).collect();
 
+    let logs: Vec<_> = log_view
+        .iter()
+        .filter_map(|entry_entity| log_entries.get(entry_entity).ok())
+        .collect();
+
     // Layout: header | separator (1 row) | logs
     let header_h = containers.len() as u16;
     let separator_row = header_h;
@@ -284,8 +262,6 @@ pub(super) fn render_tui(
         state.last_phase.clear();
         state.last_progress.clear();
     }
-
-    let name_width = containers.iter().map(|c| c.name.len()).max().unwrap_or(10);
 
     render_header(
         &mut out,
@@ -318,9 +294,8 @@ pub(super) fn render_tui(
             w: cols,
             h: log_h,
         },
-        &merged_logs,
+        &logs,
         &mut state,
-        name_width,
         full,
     );
 

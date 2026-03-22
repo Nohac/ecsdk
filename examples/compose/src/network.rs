@@ -3,7 +3,7 @@ use ecsdk::tasks::SpawnCmdTask;
 use interprocess::local_socket::traits::tokio::Listener as _;
 
 use crate::container::*;
-use crate::protocol::{LogEvent, ServerExitNotice, ShutdownRequest};
+use crate::protocol::{ServerExitNotice, ShutdownRequest};
 
 // ---------------------------------------------------------------------------
 // Shared replication plugin — ensures identical registration order
@@ -18,11 +18,11 @@ impl IsomorphicPlugin for SharedReplicationPlugin {
         app.replicate::<StartOrder>();
         app.replicate::<DownloadProgress>();
         app.replicate::<SystemEntity>();
+        app.replicate::<LogEntry>();
 
         ContainerPhase::replicate_markers(app);
         OrchestratorPhase::replicate_markers(app);
 
-        app.add_mapped_server_event::<LogEvent>(Channel::Ordered);
         app.add_server_event::<ServerExitNotice>(Channel::Ordered);
         app.add_client_event::<ShutdownRequest>(Channel::Ordered);
     }

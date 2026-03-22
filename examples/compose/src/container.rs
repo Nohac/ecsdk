@@ -1,6 +1,3 @@
-use std::collections::HashMap;
-use std::time::Instant;
-
 use ecsdk::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -55,7 +52,6 @@ pub struct DownloadProgress {
 
 #[derive(Clone, Debug)]
 pub struct LogLine {
-    pub timestamp: Instant,
     pub text: String,
 }
 
@@ -66,33 +62,40 @@ pub struct LogBuffer {
 
 impl LogBuffer {
     pub fn push(&mut self, text: impl Into<String>) {
-        self.lines.push(LogLine {
-            timestamp: Instant::now(),
-            text: text.into(),
-        });
+        self.lines.push(LogLine { text: text.into() });
+    }
+}
+
+#[derive(Component, Serialize, Deserialize)]
+#[relationship(relationship_target = LogView)]
+#[component(immutable)]
+pub struct LogEntry {
+    #[entities]
+    #[relationship]
+    pub target: Entity,
+    pub sequence: u64,
+    pub label: String,
+    pub color_idx: u8,
+    pub message: String,
+}
+
+#[derive(Component, Default, Serialize, Deserialize)]
+#[relationship_target(relationship = LogEntry, linked_spawn)]
+pub struct LogView(Vec<Entity>);
+
+impl LogView {
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = Entity> + '_ {
+        self.0.iter().copied()
     }
 }
 
 /// Marker for the system-wide log entity (global messages).
 #[derive(Component, Serialize, Deserialize)]
 pub struct SystemEntity;
-
-/// A single merged log entry with its source entity and name.
-pub struct MergedLogEntry {
-    pub entity: Entity,
-    pub name: String,
-    pub line: LogLine,
-}
-
-const MERGED_LOG_CAP: usize = 500;
-
-/// All log lines from all entities, merged and sorted by timestamp.
-/// Append-only rolling buffer — new lines are appended incrementally,
-/// old lines trimmed when the buffer exceeds `MERGED_LOG_CAP`.
-#[derive(Resource, Default)]
-pub struct MergedLogView {
-    pub entries: Vec<MergedLogEntry>,
-}
 
 /// Drains tracing events into entity LogBuffers.
 pub fn drain_tracing_logs(
@@ -108,39 +111,5 @@ pub fn drain_tracing_logs(
         if let Ok(mut log_buf) = logs.get_mut(target) {
             log_buf.push(event.message);
         }
-    }
-}
-
-/// Incrementally appends new log lines from all entities into the merged view.
-pub fn build_merged_log_view(
-    containers: Query<(Entity, &ContainerName, &LogBuffer), Without<SystemEntity>>,
-    system_query: Query<(Entity, &ContainerName, &LogBuffer), With<SystemEntity>>,
-    mut view: ResMut<MergedLogView>,
-    mut cursor: Local<HashMap<Entity, usize>>,
-) {
-    let mut new_entries = Vec::new();
-
-    for (entity, name, log_buf) in containers.iter().chain(system_query.iter()) {
-        let seen = cursor.entry(entity).or_insert(0);
-        for line in &log_buf.lines[*seen..] {
-            new_entries.push(MergedLogEntry {
-                entity,
-                name: name.0.clone(),
-                line: line.clone(),
-            });
-        }
-        *seen = log_buf.lines.len();
-    }
-
-    if new_entries.is_empty() {
-        return;
-    }
-
-    new_entries.sort_by_key(|e| e.line.timestamp);
-    view.entries.extend(new_entries);
-
-    if view.entries.len() > MERGED_LOG_CAP {
-        let excess = view.entries.len() - MERGED_LOG_CAP;
-        view.entries.drain(..excess);
     }
 }

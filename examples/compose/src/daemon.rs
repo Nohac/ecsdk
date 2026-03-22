@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use ecsdk::prelude::*;
 use ecsdk::core::{AppExit, MessageQueue};
+use ecsdk::prelude::*;
 use ecsdk::tasks::SpawnTask;
 use tokio::signal::ctrl_c;
 
@@ -10,23 +10,53 @@ use crate::container::*;
 use crate::lifecycle::*;
 use crate::message::Message;
 
-fn send_log_events(
+const LOG_ENTRY_CAP: usize = 200;
+
+fn sync_log_entries(
     mut commands: Commands,
-    query: Query<(Entity, &LogBuffer)>,
+    query: Query<(Entity, &ContainerName, Ref<LogBuffer>), Changed<LogBuffer>>,
+    related: Query<&LogView>,
+    log_view: Query<Entity, With<LogView>>,
     mut tracked: Local<HashMap<Entity, usize>>,
+    mut color_map: Local<HashMap<Entity, u8>>,
+    mut next_sequence: Local<u64>,
+    mut next_color_idx: Local<u8>,
 ) {
-    for (entity, log_buf) in &query {
-        let sent = tracked.get(&entity).copied().unwrap_or(0);
+    let Ok(log_view) = log_view.single() else {
+        return;
+    };
+
+    let mut appended = false;
+
+    for (source, name, log_buf) in &query {
+        let color_idx = *color_map.entry(source).or_insert_with(|| {
+            let idx = *next_color_idx;
+            *next_color_idx = next_color_idx.wrapping_add(1);
+            idx
+        });
+        let sent = tracked.get(&source).copied().unwrap_or(0);
         for line in &log_buf.lines[sent..] {
-            commands.server_trigger(ToClients {
-                mode: SendMode::Broadcast,
-                message: crate::protocol::LogEvent {
-                    container_entity: entity,
-                    text: line.text.clone(),
+            appended = true;
+            *next_sequence += 1;
+            commands.spawn((
+                Replicated,
+                LogEntry {
+                    target: log_view,
+                    sequence: *next_sequence,
+                    label: name.0.clone(),
+                    color_idx,
+                    message: line.text.clone(),
                 },
-            });
+            ));
         }
-        tracked.insert(entity, log_buf.lines.len());
+        tracked.insert(source, log_buf.lines.len());
+    }
+
+    if appended && let Ok(entries) = related.get(log_view) {
+        let excess = entries.len().saturating_sub(LOG_ENTRY_CAP);
+        for entry in entries.iter().take(excess) {
+            commands.entity(entry).despawn();
+        }
     }
 }
 
@@ -55,14 +85,14 @@ pub struct ComposeServerPlugin;
 
 impl Plugin for ComposeServerPlugin {
     fn build(&self, app: &mut App) {
-        // Lifecycle + log/exit broadcast
+        // Lifecycle + replicated logs/exit broadcast
         app.add_plugins(LifecyclePlugin);
         app.add_systems(
             PreUpdate,
             crate::container::drain_tracing_logs
                 .run_if(resource_exists::<ecsdk::tracing::TracingReceiver>),
         );
-        app.add_systems(Update, (send_log_events, send_exit_notice));
+        app.add_systems(Update, (sync_log_entries, send_exit_notice));
         app.add_observer(handle_shutdown_request);
 
         // Ctrl+C triggers graceful shutdown
@@ -93,6 +123,7 @@ impl Plugin for ComposeServerPlugin {
             SystemEntity,
             Replicated,
         ));
+        app.world_mut().spawn((LogView::default(), Replicated));
 
         // Backend factory — attach backends to containers spawned by state events
         app.add_observer(attach_mock_backend);

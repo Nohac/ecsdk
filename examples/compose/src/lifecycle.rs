@@ -301,7 +301,6 @@ pub struct LifecycleTestPlugin;
 impl Plugin for LifecycleTestPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(StateMachinePlugin::default().schedule(PreUpdate));
-        app.init_resource::<MergedLogView>();
         app.init_resource::<ShutdownRequested>();
     }
 }
@@ -313,7 +312,6 @@ pub struct LifecyclePlugin;
 impl Plugin for LifecyclePlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(StateMachinePlugin::default().schedule(PreUpdate));
-        app.init_resource::<MergedLogView>();
         app.init_resource::<ShutdownRequested>();
 
         // Container lifecycle observers

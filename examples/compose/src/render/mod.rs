@@ -7,8 +7,6 @@ use ecsdk::prelude::*;
 use clap::ValueEnum;
 use ecsdk::term::TermPlugin;
 
-use crate::container::build_merged_log_view;
-
 #[derive(Clone, Copy, PartialEq, Eq, Debug, ValueEnum)]
 pub enum RenderMode {
     Plain,
@@ -28,7 +26,6 @@ impl CrosstermPlugin {
 
 impl Plugin for CrosstermPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, build_merged_log_view);
         match self.mode {
             RenderMode::Tui => {
                 app.insert_resource(TerminalGuard::new());
