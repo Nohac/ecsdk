@@ -5,7 +5,8 @@ use std::ops::{Deref, DerefMut};
 use bevy::app::App;
 use bevy::ecs::prelude::World;
 use ecsdk_core::{
-    AppExit, ApplyMessage, CmdQueue, MessageQueue, TickSignal, WakeSignal, WorldCallback,
+    AppExit, ApplyMessage, CmdQueue, MessageQueue, SendMsgExt, TickSignal, WakeSignal,
+    WorldCallback,
 };
 use tokio::runtime::Handle;
 use tokio::sync::{Notify, mpsc};
@@ -72,6 +73,22 @@ impl<M: ApplyMessage> Deref for AsyncApp<M> {
 impl<M: ApplyMessage> DerefMut for AsyncApp<M> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.app
+    }
+}
+
+pub trait AppSendMsgExt {
+    fn send_msg<M: ApplyMessage>(&mut self, msg: M);
+}
+
+impl AppSendMsgExt for App {
+    fn send_msg<M: ApplyMessage>(&mut self, msg: M) {
+        self.world_mut().send_msg(msg);
+    }
+}
+
+impl<M: ApplyMessage> AppSendMsgExt for AsyncApp<M> {
+    fn send_msg<T: ApplyMessage>(&mut self, msg: T) {
+        self.app.send_msg(msg);
     }
 }
 

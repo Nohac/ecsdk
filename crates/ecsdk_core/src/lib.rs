@@ -121,3 +121,13 @@ impl<M: ApplyMessage> MessageQueue<M> {
         Self { tx }
     }
 }
+
+pub trait SendMsgExt {
+    fn send_msg<M: ApplyMessage>(&mut self, msg: M);
+}
+
+impl SendMsgExt for World {
+    fn send_msg<M: ApplyMessage>(&mut self, msg: M) {
+        self.resource::<MessageQueue<M>>().send(msg);
+    }
+}

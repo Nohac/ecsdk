@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use ecsdk::core::{AppExit, MessageQueue};
+use ecsdk::core::AppExit;
 use ecsdk::prelude::*;
 use ecsdk::tasks::SpawnTask;
 use tokio::signal::ctrl_c;
@@ -105,9 +105,8 @@ impl Plugin for ComposeServerPlugin {
             ("web-frontend", "myapp/web:latest", 2),
         ];
 
-        let state_queue = app.world().resource::<MessageQueue<Message>>().clone();
         for (name, image, order) in containers {
-            state_queue.send(Message::SpawnContainer {
+            app.send_msg(Message::SpawnContainer {
                 name: name.into(),
                 image: image.into(),
                 start_order: order,
