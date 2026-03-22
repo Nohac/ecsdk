@@ -1,0 +1,87 @@
+use std::sync::Arc;
+
+use bevy::ecs::prelude::*;
+use tokio::runtime::Handle;
+use tokio::sync::mpsc;
+
+use crate::{ApplyMessage, WakeSignal};
+
+/// Boxed closure that mutates the world directly from an async task.
+pub type WorldCallback = Box<dyn FnOnce(&mut World) + Send>;
+
+/// Resource that bridges async tasks to the ECS world.
+/// Carries a command channel sender and an optional Tokio runtime handle.
+#[derive(Resource, Clone)]
+pub struct CmdQueue {
+    pub tx: mpsc::UnboundedSender<WorldCallback>,
+    pub handle: Option<Handle>,
+    pub wake: WakeSignal,
+}
+
+impl CmdQueue {
+    pub fn new(tx: mpsc::UnboundedSender<WorldCallback>, handle: Handle, wake: WakeSignal) -> Self {
+        Self {
+            tx,
+            handle: Some(handle),
+            wake,
+        }
+    }
+
+    /// Creates a no-op queue for testing. Commands are silently dropped
+    /// and async task spawning is disabled (no Tokio runtime needed).
+    pub fn test() -> Self {
+        let (tx, _) = mpsc::unbounded_channel();
+        Self {
+            tx,
+            handle: None,
+            wake: WakeSignal(Arc::new(tokio::sync::Notify::new())),
+        }
+    }
+
+    pub fn send(&self, f: impl FnOnce(&mut World) + Send + 'static) -> &Self {
+        let _ = self.tx.send(Box::new(f));
+        self
+    }
+
+    pub fn wake(&self) {
+        self.wake.0.notify_one();
+    }
+}
+
+#[derive(Resource)]
+pub struct MessageQueue<M: ApplyMessage> {
+    tx: mpsc::UnboundedSender<M>,
+}
+
+impl<M: ApplyMessage> Clone for MessageQueue<M> {
+    fn clone(&self) -> Self {
+        Self {
+            tx: self.tx.clone(),
+        }
+    }
+}
+
+impl<M: ApplyMessage> MessageQueue<M> {
+    pub fn new(tx: mpsc::UnboundedSender<M>) -> Self {
+        Self { tx }
+    }
+
+    pub fn send(&self, msg: M) {
+        let _ = self.tx.send(msg);
+    }
+
+    pub fn test() -> Self {
+        let (tx, _) = mpsc::unbounded_channel();
+        Self { tx }
+    }
+}
+
+pub trait SendMsgExt {
+    fn send_msg<M: ApplyMessage>(&mut self, msg: M);
+}
+
+impl SendMsgExt for World {
+    fn send_msg<M: ApplyMessage>(&mut self, msg: M) {
+        self.resource::<MessageQueue<M>>().send(msg);
+    }
+}
