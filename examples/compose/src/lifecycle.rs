@@ -121,7 +121,7 @@ fn on_pulling_image(
             let result = backend
                 .pull_image(
                     move |p| {
-                        cmd_progress.send(move |world: &mut World| {
+                        cmd_progress.queue_cmd(move |world: &mut World| {
                             if let Some(mut dp) = world.get_mut::<DownloadProgress>(entity) {
                                 dp.downloaded = p.downloaded;
                                 dp.total = p.total;
@@ -135,9 +135,9 @@ fn on_pulling_image(
                 )
                 .await;
             match result {
-                Ok(()) => cmd.send_state(Message::MarkDone { container_name }),
+                Ok(()) => cmd.send_msg(Message::MarkDone { container_name }),
                 Err(e) => {
-                    cmd.send(move |world: &mut World| {
+                    cmd.queue_cmd(move |world: &mut World| {
                         world
                             .entity_mut(entity)
                             .insert((EntityError(e), Done::Failure));
@@ -179,9 +179,9 @@ fn on_starting(
                 })
                 .await;
             match result {
-                Ok(()) => cmd.send_state(Message::MarkDone { container_name }),
+                Ok(()) => cmd.send_msg(Message::MarkDone { container_name }),
                 Err(e) => {
-                    cmd.send(move |world: &mut World| {
+                    cmd.queue_cmd(move |world: &mut World| {
                         world
                             .entity_mut(entity)
                             .insert((EntityError(e), Done::Failure));
@@ -223,9 +223,9 @@ fn on_stopping(
     commands.entity(entity).spawn_task(move |cmd| async move {
         let entity = cmd.entity();
         match backend.stop_container().await {
-            Ok(()) => cmd.send_state(Message::MarkDone { container_name }),
+            Ok(()) => cmd.send_msg(Message::MarkDone { container_name }),
             Err(e) => {
-                cmd.send(move |world: &mut World| {
+                cmd.queue_cmd(move |world: &mut World| {
                     world
                         .entity_mut(entity)
                         .insert((EntityError(e), Done::Failure));

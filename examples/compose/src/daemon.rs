@@ -132,7 +132,7 @@ impl Plugin for ComposeServerPlugin {
 fn spawn_ctrl_c_handler(mut commands: Commands) {
     commands.spawn_empty().spawn_task(move |cmd| async move {
         ctrl_c().await.ok();
-        cmd.send_state(Message::RequestShutdown);
+        cmd.send_msg(Message::RequestShutdown);
     });
 }
 

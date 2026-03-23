@@ -4,7 +4,7 @@ use bevy::app::prelude::*;
 use bevy::ecs::prelude::*;
 use bevy::state::prelude::*;
 use bevy_replicon::prelude::*;
-use ecsdk_tasks::SpawnCmdTask;
+use ecsdk_tasks::SpawnTask;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc;
 
@@ -74,17 +74,16 @@ where
         let client_id = client.id();
 
         let stream = self.stream;
-        client.spawn_cmd_task(move |client_cmd| async move {
+        client.spawn_task(move |task| async move {
             let mut to_client_rx = to_client_rx;
-            let wake = client_cmd.clone();
+            let wake = task.clone();
             run_bridge(stream, &mut to_client_rx, &from_client_tx, move || {
                 wake.wake();
             })
             .await;
 
-            let entity = client_cmd.entity();
-            client_cmd
-                .send(move |world: &mut World| {
+            let entity = task.entity();
+            task.queue_cmd(move |world: &mut World| {
                     UnregisterClientCmd { entity }.apply(world);
                 })
                 .wake();

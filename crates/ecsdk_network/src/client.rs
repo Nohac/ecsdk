@@ -2,7 +2,7 @@ use bevy::app::prelude::*;
 use bevy::ecs::prelude::*;
 use bevy::state::prelude::*;
 use bevy_replicon::prelude::*;
-use ecsdk_tasks::SpawnCmdTask;
+use ecsdk_tasks::SpawnTask;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc;
 
@@ -86,15 +86,15 @@ where
         .apply(world);
 
         let mut com = world.commands();
-        com.spawn_empty().spawn_cmd_task(move |cmd| async move {
+        com.spawn_empty().spawn_task(move |task| async move {
             let mut to_server_rx = to_server_rx;
-            let wake = cmd.clone();
+            let wake = task.clone();
             run_bridge(self.stream, &mut to_server_rx, &from_server_tx, move || {
                 wake.wake();
             })
             .await;
 
-            cmd.send(|world: &mut World| {
+            task.queue_cmd(|world: &mut World| {
                 RemoveClientBridgeCmd.apply(world);
             })
             .wake();

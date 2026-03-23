@@ -1,5 +1,5 @@
 use ecsdk::prelude::*;
-use ecsdk::tasks::SpawnCmdTask;
+use ecsdk::tasks::SpawnTask;
 use interprocess::local_socket::traits::tokio::Listener as _;
 
 use crate::container::*;
@@ -47,7 +47,7 @@ impl IsomorphicPlugin for ConnectionPlugin {
 pub fn spawn_server_listener(mut commands: Commands) {
     commands
         .spawn_empty()
-        .spawn_cmd_task(move |cmd| async move {
+        .spawn_task(move |task| async move {
             let listener = crate::ipc::create_listener().expect("Failed to bind daemon socket");
             tracing::warn!("Daemon listening on {}", crate::ipc::SOCKET_PATH);
 
@@ -60,7 +60,7 @@ pub fn spawn_server_listener(mut commands: Commands) {
                     }
                 };
 
-                cmd.send(move |world: &mut World| {
+                task.queue_cmd(move |world: &mut World| {
                     ecsdk::network::AcceptClientCmd { stream }.apply(world);
                 })
                 .wake();
@@ -75,17 +75,17 @@ pub fn spawn_server_listener(mut commands: Commands) {
 pub fn spawn_client_connection(mut commands: Commands) {
     commands
         .spawn_empty()
-        .spawn_cmd_task(move |cmd| async move {
+        .spawn_task(move |task| async move {
             match crate::ipc::connect().await {
                 Ok(stream) => {
-                    cmd.send(move |world: &mut World| {
+                    task.queue_cmd(move |world: &mut World| {
                         ecsdk::network::ConnectClientCmd { stream }.apply(world);
                     })
                     .wake();
                 }
                 Err(e) => {
                     tracing::warn!("Failed to connect to daemon: {e}");
-                    cmd.send(|world: &mut World| {
+                    task.queue_cmd(|world: &mut World| {
                         world.resource_mut::<AppExit>().0 = true;
                     })
                     .wake();

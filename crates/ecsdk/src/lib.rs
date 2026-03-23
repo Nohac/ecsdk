@@ -23,11 +23,14 @@ pub mod prelude {
     pub use bevy::ecs::prelude::*;
 
     pub use ecsdk_core::{
-        AppExit, ApplyMessage, MessageQueue, ScheduleControl, SendMsgExt, WakeSignal,
+        AppExit, ApplyMessage, MessageQueue, QueueCmdExt, ScheduleControl, SendMsgExt,
+        WakeSignal,
     };
 
     #[cfg(feature = "app")]
-    pub use ecsdk_app::{AppSendMsgExt, AsyncApp, Receivers, run_async, setup};
+    pub use ecsdk_app::{
+        AppQueueCmdExt, AppSendMsgExt, AsyncApp, Receivers, run_async, setup,
+    };
 
     #[cfg(feature = "macros")]
     pub use ecsdk_macros::{ClientRequest, StateComponent};

@@ -5,7 +5,8 @@ use std::time::Duration;
 use bevy::app::App;
 use bevy::ecs::prelude::World;
 use ecsdk_core::{
-    AppExit, ApplyMessage, CmdQueue, MessageQueue, SendMsgExt, TickSignal, WakeSignal,
+    AppExit, ApplyMessage, CmdQueue, MessageQueue, QueueCmdExt, SendMsgExt, TickSignal,
+    WakeSignal,
     WorldCallback,
 };
 use tokio::runtime::Handle;
@@ -19,11 +20,18 @@ pub struct Receivers<M: ApplyMessage> {
     pub(crate) wake: Arc<Notify>,
 }
 
+/// An async-capable Bevy app bundled with the runtime receivers created by
+/// [`setup`].
+///
+/// `AsyncApp` dereferences to `App`, so setup code can treat it like a normal
+/// Bevy app and then call [`AsyncApp::run`] when ready.
 pub struct AsyncApp<M: ApplyMessage> {
     app: App,
     receivers: Receivers<M>,
 }
 
+/// Creates a new [`AsyncApp`] and installs the core queue and signal resources
+/// required by the `ecsdk` runtime loop.
 pub fn setup<M: ApplyMessage>() -> AsyncApp<M> {
     let (state_tx, state_rx) = mpsc::unbounded_channel();
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
@@ -53,10 +61,14 @@ pub fn setup<M: ApplyMessage>() -> AsyncApp<M> {
 }
 
 impl<M: ApplyMessage> AsyncApp<M> {
+    /// Splits the wrapper into its raw `App` and runtime receivers.
+    ///
+    /// Most applications should prefer [`AsyncApp::run`] instead.
     pub fn into_parts(self) -> (App, Receivers<M>) {
         (self.app, self.receivers)
     }
 
+    /// Runs the app using the standard `ecsdk` async runtime loop.
     pub async fn run(mut self) {
         run_async(&mut self.app, self.receivers).await;
     }
@@ -77,6 +89,7 @@ impl<M: ApplyMessage> DerefMut for AsyncApp<M> {
 }
 
 pub trait AppSendMsgExt {
+    /// Enqueues a typed domain message from app-level setup code.
     fn send_msg<M: ApplyMessage>(&mut self, msg: M);
 }
 
@@ -92,6 +105,28 @@ impl<M: ApplyMessage> AppSendMsgExt for AsyncApp<M> {
     }
 }
 
+pub trait AppQueueCmdExt {
+    /// Queues a direct world callback from app-level setup code.
+    fn queue_cmd(&mut self, f: impl FnOnce(&mut World) + Send + 'static);
+}
+
+impl AppQueueCmdExt for App {
+    fn queue_cmd(&mut self, f: impl FnOnce(&mut World) + Send + 'static) {
+        self.world_mut().queue_cmd(f);
+    }
+}
+
+impl<M: ApplyMessage> AppQueueCmdExt for AsyncApp<M> {
+    fn queue_cmd(&mut self, f: impl FnOnce(&mut World) + Send + 'static) {
+        self.app.queue_cmd(f);
+    }
+}
+
+/// Runs the standard `ecsdk` async loop for an existing Bevy app and the
+/// receiver set returned by [`setup`].
+///
+/// The loop drains typed state messages, queued world callbacks, immediate wake
+/// notifications, and FPS-bounded tick notifications.
 pub async fn run_async<M: ApplyMessage>(app: &mut App, mut rx: Receivers<M>) {
     let mut tick_interval = interval(Duration::from_millis(1000 / 5));
     let mut needs_tick = false;

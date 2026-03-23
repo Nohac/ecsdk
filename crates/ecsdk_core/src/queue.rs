@@ -38,11 +38,16 @@ impl CmdQueue {
         }
     }
 
-    pub fn send(&self, f: impl FnOnce(&mut World) + Send + 'static) -> &Self {
+    /// Enqueues a world-mutating callback to be run on the ECS thread.
+    ///
+    /// Use this for direct one-off world access from async code when a typed
+    /// domain message would be unnecessarily indirect.
+    pub fn queue_cmd(&self, f: impl FnOnce(&mut World) + Send + 'static) -> &Self {
         let _ = self.tx.send(Box::new(f));
         self
     }
 
+    /// Requests an immediate schedule run from the async runtime loop.
     pub fn wake(&self) {
         self.wake.0.notify_one();
     }
@@ -66,6 +71,7 @@ impl<M: ApplyMessage> MessageQueue<M> {
         Self { tx }
     }
 
+    /// Sends a typed domain message to the async runtime loop.
     pub fn send(&self, msg: M) {
         let _ = self.tx.send(msg);
     }
@@ -76,12 +82,44 @@ impl<M: ApplyMessage> MessageQueue<M> {
     }
 }
 
+/// Convenience methods for sending typed domain messages from ECS-side APIs.
+///
+/// This is the message-oriented counterpart to [`QueueCmdExt`].
 pub trait SendMsgExt {
+    /// Enqueues a typed domain message for later application to the world.
     fn send_msg<M: ApplyMessage>(&mut self, msg: M);
 }
 
 impl SendMsgExt for World {
     fn send_msg<M: ApplyMessage>(&mut self, msg: M) {
         self.resource::<MessageQueue<M>>().send(msg);
+    }
+}
+
+impl SendMsgExt for Commands<'_, '_> {
+    fn send_msg<M: ApplyMessage>(&mut self, msg: M) {
+        self.queue(move |world: &mut World| {
+            world.send_msg(msg);
+        });
+    }
+}
+
+/// Convenience methods for queueing direct world callbacks from ECS-side APIs.
+///
+/// This is the callback-oriented counterpart to [`SendMsgExt`].
+pub trait QueueCmdExt {
+    /// Queues a callback that will run with `&mut World`.
+    fn queue_cmd(&mut self, f: impl FnOnce(&mut World) + Send + 'static);
+}
+
+impl QueueCmdExt for World {
+    fn queue_cmd(&mut self, f: impl FnOnce(&mut World) + Send + 'static) {
+        f(self);
+    }
+}
+
+impl QueueCmdExt for Commands<'_, '_> {
+    fn queue_cmd(&mut self, f: impl FnOnce(&mut World) + Send + 'static) {
+        self.queue(f);
     }
 }
