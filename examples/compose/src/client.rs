@@ -1,10 +1,9 @@
-use bevy::state::prelude::*;
 use crossterm::event::{Event, KeyCode, KeyModifiers};
 use ecsdk::prelude::*;
 use ecsdk::term::TerminalEvent;
 
 use crate::message::Message;
-use crate::protocol::{ServerExitNotice, ShutdownRequest};
+use crate::protocol::ShutdownRequest;
 use crate::render::{CrosstermPlugin, RenderMode};
 use crate::status::StatusFeature;
 
@@ -12,8 +11,13 @@ use crate::status::StatusFeature;
 // Client-specific observers and systems
 // ---------------------------------------------------------------------------
 
-fn on_server_exit(_trigger: On<ServerExitNotice>, mut exit: MessageWriter<AppExit>) {
-    exit.write(AppExit::Success);
+fn on_server_disconnect(
+    mut disconnects: MessageReader<ServerDisconnected>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    if disconnects.read().next().is_some() {
+        exit.write(AppExit::Success);
+    }
 }
 
 fn on_ctrl_c(trigger: On<TerminalEvent>, mut commands: Commands) {
@@ -22,18 +26,6 @@ fn on_ctrl_c(trigger: On<TerminalEvent>, mut commands: Commands) {
         && key.modifiers.contains(KeyModifiers::CONTROL)
     {
         commands.client_trigger(ShutdownRequest);
-    }
-}
-
-fn detect_disconnect(
-    state: Res<State<ClientState>>,
-    mut exit: MessageWriter<AppExit>,
-    mut was_connected: Local<bool>,
-) {
-    if *state.get() == ClientState::Connected {
-        *was_connected = true;
-    } else if *was_connected {
-        exit.write(AppExit::Success);
     }
 }
 
@@ -55,10 +47,8 @@ impl Plugin for ComposeClientPlugin {
         );
 
         app.add_plugins(CrosstermPlugin::new(self.mode));
-        app.add_observer(on_server_exit);
         app.add_observer(on_ctrl_c);
-
-        app.add_systems(Update, detect_disconnect);
+        app.add_systems(Update, on_server_disconnect);
     }
 }
 

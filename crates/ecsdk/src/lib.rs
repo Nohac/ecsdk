@@ -41,5 +41,6 @@ pub mod prelude {
     pub use ecsdk_network::{
         AppRole, ClientRequest, InitialConnection, IsomorphicApp,
         IsomorphicAppExt, IsomorphicPlugin, RequestPlugin,
+        ServerDisconnected,
     };
 }

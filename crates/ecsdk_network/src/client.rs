@@ -9,6 +9,10 @@ use tokio::sync::mpsc;
 use crate::connection::{Connected, ConnectionStateEntity, InitialConnection};
 use crate::{RepliconPacket, run_bridge};
 
+/// Emitted locally on the client when the transport to the server closes.
+#[derive(Message)]
+pub struct ServerDisconnected;
+
 #[derive(Resource)]
 struct ClientBridge {
     from_server_rx: mpsc::UnboundedReceiver<RepliconPacket>,
@@ -29,6 +33,7 @@ impl Plugin for ClientRepliconPlugin {
 
 impl Plugin for ClientTransportPlugin {
     fn build(&self, app: &mut App) {
+        app.add_message::<ServerDisconnected>();
         app.replicate::<ConnectionStateEntity>();
         app.replicate::<InitialConnection>();
         app.replicate::<Connected>();
@@ -63,7 +68,11 @@ pub struct RemoveClientBridgeCmd;
 
 impl Command for RemoveClientBridgeCmd {
     fn apply(self, world: &mut World) {
+        let was_connected = world.contains_resource::<ClientBridge>();
         world.remove_resource::<ClientBridge>();
+        if was_connected {
+            world.write_message(ServerDisconnected);
+        }
     }
 }
 

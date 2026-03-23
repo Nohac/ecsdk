@@ -13,6 +13,7 @@ This crate contains the Bevy Replicon integration layer, client/server transport
 - `ClientRepliconPlugin` / `ServerRepliconPlugin` for app setup
 - `ConnectClientCmd` / `AcceptClientCmd<S>` for wiring streams into Replicon
 - `InitialConnection` and `Connected` markers on the replicated connection-state entity
+- `ServerDisconnected` for local client-side disconnect handling
 
 ## Main Pattern
 

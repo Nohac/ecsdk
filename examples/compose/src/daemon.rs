@@ -59,16 +59,6 @@ fn sync_log_entries(
     }
 }
 
-fn send_exit_notice(mut commands: Commands, exits: Res<Messages<AppExit>>, mut sent: Local<bool>) {
-    if !exits.is_empty() && !*sent {
-        commands.server_trigger(ToClients {
-            mode: SendMode::Broadcast,
-            message: crate::protocol::ServerExitNotice,
-        });
-        *sent = true;
-    }
-}
-
 fn handle_shutdown_request(
     _trigger: On<FromClient<crate::protocol::ShutdownRequest>>,
     mut commands: Commands,
@@ -91,7 +81,7 @@ impl Plugin for ComposeServerPlugin {
             crate::container::drain_tracing_logs
                 .run_if(resource_exists::<ecsdk::tracing::TracingReceiver>),
         );
-        app.add_systems(Update, (sync_log_entries, send_exit_notice));
+        app.add_systems(Update, sync_log_entries);
         app.add_observer(handle_shutdown_request);
 
         // Ctrl+C triggers graceful shutdown
