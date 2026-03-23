@@ -23,8 +23,7 @@ pub mod prelude {
     pub use bevy::ecs::prelude::*;
 
     pub use ecsdk_core::{
-        AppExit, ApplyMessage, MessageQueue, QueueCmdExt, ScheduleControl, SendMsgExt,
-        WakeSignal,
+        ApplyMessage, MessageQueue, QueueCmdExt, ScheduleControl, SendMsgExt, WakeSignal,
     };
 
     #[cfg(feature = "app")]

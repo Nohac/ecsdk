@@ -5,7 +5,7 @@ use std::time::Duration;
 use bevy::app::App;
 use bevy::ecs::prelude::World;
 use ecsdk_core::{
-    AppExit, ApplyMessage, CmdQueue, MessageQueue, QueueCmdExt, SendMsgExt, TickSignal,
+    ApplyMessage, CmdQueue, MessageQueue, QueueCmdExt, SendMsgExt, TickSignal,
     WakeSignal,
     WorldCallback,
 };
@@ -47,7 +47,6 @@ pub fn setup<M: ApplyMessage>() -> AsyncApp<M> {
     app.insert_resource(MessageQueue::<M>::new(state_tx));
     app.insert_resource(TickSignal(tick.clone()));
     app.insert_resource(WakeSignal(wake.clone()));
-    app.init_resource::<AppExit>();
 
     AsyncApp {
         app,
@@ -134,6 +133,9 @@ pub async fn run_async<M: ApplyMessage>(app: &mut App, mut rx: Receivers<M>) {
     app.finish();
     app.cleanup();
     app.update();
+    if app.should_exit().is_some() {
+        return;
+    }
 
     loop {
         tokio::select! {
@@ -146,6 +148,9 @@ pub async fn run_async<M: ApplyMessage>(app: &mut App, mut rx: Receivers<M>) {
                 }
                 drain_cmds(app.world_mut(), &mut rx.cmd_rx);
                 app.update();
+                if app.should_exit().is_some() {
+                    break;
+                }
             }
 
             Some(cb) = rx.cmd_rx.recv() => {
@@ -156,6 +161,9 @@ pub async fn run_async<M: ApplyMessage>(app: &mut App, mut rx: Receivers<M>) {
             _ = rx.wake.notified() => {
                 drain_cmds(app.world_mut(), &mut rx.cmd_rx);
                 app.update();
+                if app.should_exit().is_some() {
+                    break;
+                }
             }
 
             _ = rx.tick.notified() => {
@@ -166,11 +174,10 @@ pub async fn run_async<M: ApplyMessage>(app: &mut App, mut rx: Receivers<M>) {
                 drain_cmds(app.world_mut(), &mut rx.cmd_rx);
                 app.update();
                 needs_tick = false;
+                if app.should_exit().is_some() {
+                    break;
+                }
             }
-        }
-
-        if app.world().resource::<AppExit>().0 {
-            break;
         }
     }
 }

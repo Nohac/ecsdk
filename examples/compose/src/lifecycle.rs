@@ -274,14 +274,14 @@ fn on_all_stopped(
     _trigger: On<Insert, AllStopped>,
     mut logs: Query<&mut LogBuffer>,
     system_entity: Query<Entity, With<SystemEntity>>,
-    mut exit: ResMut<ecsdk::core::AppExit>,
+    mut exit: MessageWriter<AppExit>,
 ) {
     if let Ok(sys) = system_entity.single()
         && let Ok(mut log_buf) = logs.get_mut(sys)
     {
         log_buf.push("All containers stopped.");
     }
-    exit.0 = true;
+    exit.write(AppExit::Success);
 }
 
 // ── ShutdownAll handler ──

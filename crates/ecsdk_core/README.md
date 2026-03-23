@@ -10,7 +10,6 @@ This crate defines the message and command queues that bridge async work into th
 - `MessageQueue<M>` for typed domain events crossing the async boundary
 - `CmdQueue` for arbitrary world callbacks
 - `TickSignal` and `WakeSignal` for schedule control
-- `AppExit` for cooperative shutdown
 - `SendMsgExt` for enqueuing typed messages from `World`
 
 ## Main Pattern
@@ -46,6 +45,6 @@ impl ApplyMessage for Message {
 ## Patterns
 
 - Use `world.send_msg(...)` for typed domain flow
-- Use `CmdQueue::send(...)` for direct world callbacks
+- Use `CmdQueue::queue_cmd(...)` for direct world callbacks
 - Use `world.wake()` when a schedule run is needed immediately
 - Use `world.tick()` when rendering or schedule work can wait for the next FPS boundary

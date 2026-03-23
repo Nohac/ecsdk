@@ -1,6 +1,5 @@
 use bevy::state::prelude::*;
 use crossterm::event::{Event, KeyCode, KeyModifiers};
-use ecsdk::core::AppExit;
 use ecsdk::prelude::*;
 use ecsdk::term::TerminalEvent;
 
@@ -13,8 +12,8 @@ use crate::status::StatusFeature;
 // Client-specific observers and systems
 // ---------------------------------------------------------------------------
 
-fn on_server_exit(_trigger: On<ServerExitNotice>, mut exit: ResMut<AppExit>) {
-    exit.0 = true;
+fn on_server_exit(_trigger: On<ServerExitNotice>, mut exit: MessageWriter<AppExit>) {
+    exit.write(AppExit::Success);
 }
 
 fn on_ctrl_c(trigger: On<TerminalEvent>, mut commands: Commands) {
@@ -28,13 +27,13 @@ fn on_ctrl_c(trigger: On<TerminalEvent>, mut commands: Commands) {
 
 fn detect_disconnect(
     state: Res<State<ClientState>>,
-    mut exit: ResMut<AppExit>,
+    mut exit: MessageWriter<AppExit>,
     mut was_connected: Local<bool>,
 ) {
     if *state.get() == ClientState::Connected {
         *was_connected = true;
     } else if *was_connected {
-        exit.0 = true;
+        exit.write(AppExit::Success);
     }
 }
 

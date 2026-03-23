@@ -86,7 +86,7 @@ pub fn spawn_client_connection(mut commands: Commands) {
                 Err(e) => {
                     tracing::warn!("Failed to connect to daemon: {e}");
                     task.queue_cmd(|world: &mut World| {
-                        world.resource_mut::<AppExit>().0 = true;
+                        world.write_message(AppExit::Success);
                     })
                     .wake();
                 }

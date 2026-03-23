@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-use ecsdk::core::AppExit;
 use ecsdk::prelude::*;
 use ecsdk::tasks::SpawnTask;
 use tokio::signal::ctrl_c;
@@ -60,8 +59,8 @@ fn sync_log_entries(
     }
 }
 
-fn send_exit_notice(mut commands: Commands, exit: Res<AppExit>, mut sent: Local<bool>) {
-    if exit.0 && !*sent {
+fn send_exit_notice(mut commands: Commands, exits: Res<Messages<AppExit>>, mut sent: Local<bool>) {
+    if !exits.is_empty() && !*sent {
         commands.server_trigger(ToClients {
             mode: SendMode::Broadcast,
             message: crate::protocol::ServerExitNotice,

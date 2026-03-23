@@ -43,9 +43,9 @@ fn handle_status_request(trigger: On<FromClient<StatusRequest>>, mut commands: C
     );
 }
 
-fn handle_status_response(trigger: On<StatusResponse>, mut exit: ResMut<AppExit>) {
+fn handle_status_response(trigger: On<StatusResponse>, mut exit: MessageWriter<AppExit>) {
     let e = trigger.event();
     println!("time: {:?}", e.time);
     println!("note: {}", e.note);
-    exit.0 = true;
+    exit.write(AppExit::Success);
 }
