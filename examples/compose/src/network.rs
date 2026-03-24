@@ -25,11 +25,7 @@ impl IsomorphicPlugin for SharedReplicationPlugin {
 
         app.add_client_event::<ShutdownRequest>(Channel::Ordered);
     }
-}
 
-pub struct ConnectionPlugin;
-
-impl IsomorphicPlugin for ConnectionPlugin {
     fn build_server(&self, app: &mut App) {
         app.add_systems(Startup, spawn_server_listener);
     }
@@ -44,27 +40,24 @@ impl IsomorphicPlugin for ConnectionPlugin {
 // ---------------------------------------------------------------------------
 
 pub fn spawn_server_listener(mut commands: Commands) {
-    commands
-        .spawn_empty()
-        .spawn_task(move |task| async move {
-            let listener = crate::ipc::create_listener().expect("Failed to bind daemon socket");
-            tracing::warn!("Daemon listening on {}", crate::ipc::SOCKET_PATH);
+    commands.spawn_empty().spawn_task(move |task| async move {
+        let listener = crate::ipc::create_listener().expect("Failed to bind daemon socket");
+        tracing::warn!("Daemon listening on {}", crate::ipc::SOCKET_PATH);
 
-            loop {
-                let stream = match listener.accept().await {
-                    Ok(stream) => stream,
-                    Err(e) => {
-                        tracing::warn!("Accept failed: {e}");
-                        continue;
-                    }
-                };
+        loop {
+            let stream = match listener.accept().await {
+                Ok(stream) => stream,
+                Err(e) => {
+                    tracing::warn!("Accept failed: {e}");
+                    continue;
+                }
+            };
 
-                task.queue_cmd(move |world: &mut World| {
-                    ecsdk::network::AcceptClientCmd { stream }.apply(world);
-                })
-                .wake();
-            }
-        });
+            task.queue_cmd(move |world: &mut World| {
+                ecsdk::network::AcceptClientCmd { stream }.apply(world);
+            });
+        }
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -72,23 +65,19 @@ pub fn spawn_server_listener(mut commands: Commands) {
 // ---------------------------------------------------------------------------
 
 pub fn spawn_client_connection(mut commands: Commands) {
-    commands
-        .spawn_empty()
-        .spawn_task(move |task| async move {
-            match crate::ipc::connect().await {
-                Ok(stream) => {
-                    task.queue_cmd(move |world: &mut World| {
-                        ecsdk::network::ConnectClientCmd { stream }.apply(world);
-                    })
-                    .wake();
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to connect to daemon: {e}");
-                    task.queue_cmd(|world: &mut World| {
-                        world.write_message(AppExit::Success);
-                    })
-                    .wake();
-                }
+    commands.spawn_empty().spawn_task(move |task| async move {
+        match crate::ipc::connect().await {
+            Ok(stream) => {
+                task.queue_cmd(move |world: &mut World| {
+                    ecsdk::network::ConnectClientCmd { stream }.apply(world);
+                });
             }
-        });
+            Err(e) => {
+                tracing::warn!("Failed to connect to daemon: {e}");
+                task.queue_cmd(|world: &mut World| {
+                    world.write_message(AppExit::Success);
+                });
+            }
+        }
+    });
 }
