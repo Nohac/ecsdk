@@ -19,6 +19,43 @@ pub struct Receivers<M: ApplyMessage> {
     pub(crate) wake: Arc<Notify>,
 }
 
+/// Runtime tuning for the `ecsdk` async loop.
+#[derive(Clone, Copy, Debug)]
+pub struct RuntimeConfig {
+    tick_rate_hz: u32,
+}
+
+impl RuntimeConfig {
+    /// Creates a runtime configuration with the default tick cadence.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Returns the configured tick rate in hertz.
+    pub fn tick_rate_hz(&self) -> u32 {
+        self.tick_rate_hz
+    }
+
+    /// Sets the tick rate used for tick-bound updates.
+    ///
+    /// Panics if `tick_rate_hz` is zero.
+    pub fn with_tick_rate_hz(mut self, tick_rate_hz: u32) -> Self {
+        assert!(tick_rate_hz > 0, "tick_rate_hz must be greater than zero");
+        self.tick_rate_hz = tick_rate_hz;
+        self
+    }
+
+    fn tick_interval(self) -> Duration {
+        Duration::from_secs_f64(1.0 / self.tick_rate_hz as f64)
+    }
+}
+
+impl Default for RuntimeConfig {
+    fn default() -> Self {
+        Self { tick_rate_hz: 5 }
+    }
+}
+
 /// An async-capable Bevy app bundled with the runtime receivers created by
 /// [`setup`].
 ///
@@ -27,6 +64,7 @@ pub struct Receivers<M: ApplyMessage> {
 pub struct AsyncApp<M: ApplyMessage> {
     app: App,
     receivers: Receivers<M>,
+    runtime: RuntimeConfig,
 }
 
 /// Creates a new [`AsyncApp`] and installs the core queue and signal resources
@@ -56,6 +94,7 @@ pub fn setup<M: ApplyMessage>() -> AsyncApp<M> {
             tick,
             wake,
         },
+        runtime: RuntimeConfig::default(),
     }
 }
 
@@ -67,9 +106,29 @@ impl<M: ApplyMessage> AsyncApp<M> {
         (self.app, self.receivers)
     }
 
+    /// Returns the current runtime configuration.
+    pub fn runtime_config(&self) -> RuntimeConfig {
+        self.runtime
+    }
+
+    /// Replaces the runtime configuration used when [`AsyncApp::run`] is
+    /// called.
+    pub fn set_runtime_config(&mut self, runtime: RuntimeConfig) -> &mut Self {
+        self.runtime = runtime;
+        self
+    }
+
+    /// Sets the tick cadence used for tick-bound updates.
+    ///
+    /// Panics if `tick_rate_hz` is zero.
+    pub fn set_tick_rate_hz(&mut self, tick_rate_hz: u32) -> &mut Self {
+        self.runtime = self.runtime.with_tick_rate_hz(tick_rate_hz);
+        self
+    }
+
     /// Runs the app using the standard `ecsdk` async runtime loop.
     pub async fn run(mut self) {
-        run_async(&mut self.app, self.receivers).await;
+        run_async(&mut self.app, self.receivers, self.runtime).await;
     }
 }
 
@@ -139,8 +198,12 @@ impl<M: ApplyMessage> AppQueueCmdExt for AsyncApp<M> {
 ///
 /// The loop drains typed state messages, queued world callbacks, immediate wake
 /// notifications, and FPS-bounded tick notifications.
-pub async fn run_async<M: ApplyMessage>(app: &mut App, mut rx: Receivers<M>) {
-    let mut tick_interval = interval(Duration::from_millis(1000 / 5));
+pub async fn run_async<M: ApplyMessage>(
+    app: &mut App,
+    mut rx: Receivers<M>,
+    runtime: RuntimeConfig,
+) {
+    let mut tick_interval = interval(runtime.tick_interval());
     let mut needs_tick = false;
 
     app.finish();

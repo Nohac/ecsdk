@@ -28,7 +28,7 @@ pub mod prelude {
 
     #[cfg(feature = "app")]
     pub use ecsdk_app::{
-        AppQueueCmdExt, AppSendMsgExt, AsyncApp, Receivers, run_async, setup,
+        AppQueueCmdExt, AppSendMsgExt, AsyncApp, Receivers, RuntimeConfig, run_async, setup,
     };
 
     #[cfg(feature = "macros")]

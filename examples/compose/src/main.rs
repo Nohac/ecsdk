@@ -134,7 +134,8 @@ async fn main() {
     let iso = create_isomorphic_app();
 
     if cli.daemon {
-        let app = iso.build_server();
+        let mut app = iso.build_server();
+        app.set_tick_rate_hz(10);
         let app = run_daemon(app);
         app.run().await;
         let _ = std::fs::remove_file(crate::ipc::SOCKET_PATH);
@@ -145,7 +146,7 @@ async fn main() {
     let command = cli.command.unwrap_or(Command::Up);
     ensure_daemon(matches!(command, Command::Up)).await;
 
-    let app = iso.build_client();
+    let mut app = iso.build_client();
     let app = match command {
         Command::Up => run_up(app, resolve_render_mode(cli.output)),
         Command::Status => run_status(app),

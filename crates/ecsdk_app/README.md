@@ -8,6 +8,7 @@ This crate owns the `AsyncApp` wrapper and the Tokio-driven runtime loop that dr
 
 - `setup<M>()` to create a ready-to-configure `AsyncApp<M>`
 - `AsyncApp<M>` as a thin wrapper around `bevy::app::App`
+- `RuntimeConfig` for configuring tick-bound update cadence
 - `run_async(...)` for the biased runtime loop
 - `AppSendMsgExt` for enqueueing typed messages from `App` and `AsyncApp`
 
@@ -32,6 +33,7 @@ That keeps world mutations responsive while still supporting FPS-bounded renderi
 
 ```rust
 let mut app = ecsdk_app::setup::<Message>();
+app.set_tick_rate_hz(30);
 app.add_plugins(MyPlugin);
 app.run().await;
 ```
@@ -41,3 +43,5 @@ app.run().await;
 - Use `AsyncApp` when the app owns async queues and runtime receivers
 - Treat it like a normal `App` during setup; it dereferences to `App`
 - Prefer `send_msg(...)` for typed domain messages during bootstrap
+- Adjust `RuntimeConfig` or `set_tick_rate_hz(...)` when the default 5 Hz tick
+  cadence is too low or too high for your app
