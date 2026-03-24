@@ -2,6 +2,7 @@ use bevy::app::prelude::*;
 use bevy::ecs::prelude::*;
 use bevy::state::prelude::*;
 use bevy_replicon::prelude::*;
+use ecsdk_core::ScheduleControl;
 use ecsdk_tasks::SpawnTask;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc;
@@ -103,12 +104,12 @@ where
             })
             .await;
 
-            task.queue_cmd(|world: &mut World| {
+            task.queue_cmd_wake(|world: &mut World| {
                 RemoveClientBridgeCmd.apply(world);
-            })
-            .wake();
+            });
         });
 
+        world.wake();
         world.flush();
     }
 }

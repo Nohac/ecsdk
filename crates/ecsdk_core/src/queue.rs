@@ -4,25 +4,33 @@ use bevy::ecs::prelude::*;
 use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 
-use crate::{ApplyMessage, WakeSignal};
+use crate::{ApplyMessage, ScheduleControl, TickSignal, WakeSignal};
 
 /// Boxed closure that mutates the world directly from an async task.
 pub type WorldCallback = Box<dyn FnOnce(&mut World) + Send>;
 
 /// Resource that bridges async tasks to the ECS world.
-/// Carries a command channel sender and an optional Tokio runtime handle.
+/// Carries a command channel sender, schedule signals, and an optional Tokio
+/// runtime handle.
 #[derive(Resource, Clone)]
 pub struct CmdQueue {
     pub tx: mpsc::UnboundedSender<WorldCallback>,
     pub handle: Option<Handle>,
+    pub tick: TickSignal,
     pub wake: WakeSignal,
 }
 
 impl CmdQueue {
-    pub fn new(tx: mpsc::UnboundedSender<WorldCallback>, handle: Handle, wake: WakeSignal) -> Self {
+    pub fn new(
+        tx: mpsc::UnboundedSender<WorldCallback>,
+        handle: Handle,
+        tick: TickSignal,
+        wake: WakeSignal,
+    ) -> Self {
         Self {
             tx,
             handle: Some(handle),
+            tick,
             wake,
         }
     }
@@ -34,22 +42,19 @@ impl CmdQueue {
         Self {
             tx,
             handle: None,
+            tick: TickSignal(Arc::new(tokio::sync::Notify::new())),
             wake: WakeSignal(Arc::new(tokio::sync::Notify::new())),
         }
-    }
-
-    /// Enqueues a world-mutating callback to be run on the ECS thread.
-    ///
-    /// Use this for direct one-off world access from async code when a typed
-    /// domain message would be unnecessarily indirect.
-    pub fn queue_cmd(&self, f: impl FnOnce(&mut World) + Send + 'static) -> &Self {
-        let _ = self.tx.send(Box::new(f));
-        self
     }
 
     /// Requests an immediate schedule run from the async runtime loop.
     pub fn wake(&self) {
         self.wake.0.notify_one();
+    }
+
+    /// Requests processing on the next tick-bound update.
+    pub fn tick(&self) {
+        self.tick.0.notify_one();
     }
 }
 
@@ -104,22 +109,51 @@ impl SendMsgExt for Commands<'_, '_> {
     }
 }
 
-/// Convenience methods for queueing direct world callbacks from ECS-side APIs.
+/// Convenience methods for queueing direct world callbacks from ECS-side APIs
+/// with explicit scheduling behavior.
 ///
-/// This is the callback-oriented counterpart to [`SendMsgExt`].
+/// This is the callback-oriented counterpart to [`SendMsgExt`]. Unlike typed
+/// messages, direct callbacks do not carry their own scheduling semantics, so
+/// callers must decide whether the follow-up work should run immediately or on
+/// the next tick-bound update.
 pub trait QueueCmdExt {
-    /// Queues a callback that will run with `&mut World`.
-    fn queue_cmd(&mut self, f: impl FnOnce(&mut World) + Send + 'static);
+    /// Queues a callback and requests an immediate `app.update()`.
+    ///
+    /// Use this when the queued world mutation should be observed by systems as
+    /// soon as possible.
+    fn queue_cmd_wake(&mut self, f: impl FnOnce(&mut World) + Send + 'static);
+
+    /// Queues a callback and requests processing on the next tick-bound update.
+    ///
+    /// Use this when the queued world mutation is render-oriented or can wait
+    /// for the next bounded frame.
+    fn queue_cmd_tick(&mut self, f: impl FnOnce(&mut World) + Send + 'static);
 }
 
 impl QueueCmdExt for World {
-    fn queue_cmd(&mut self, f: impl FnOnce(&mut World) + Send + 'static) {
+    fn queue_cmd_wake(&mut self, f: impl FnOnce(&mut World) + Send + 'static) {
         f(self);
+        self.wake();
+    }
+
+    fn queue_cmd_tick(&mut self, f: impl FnOnce(&mut World) + Send + 'static) {
+        f(self);
+        self.tick();
     }
 }
 
 impl QueueCmdExt for Commands<'_, '_> {
-    fn queue_cmd(&mut self, f: impl FnOnce(&mut World) + Send + 'static) {
-        self.queue(f);
+    fn queue_cmd_wake(&mut self, f: impl FnOnce(&mut World) + Send + 'static) {
+        self.queue(move |world: &mut World| {
+            f(world);
+            world.wake();
+        });
+    }
+
+    fn queue_cmd_tick(&mut self, f: impl FnOnce(&mut World) + Send + 'static) {
+        self.queue(move |world: &mut World| {
+            f(world);
+            world.tick();
+        });
     }
 }

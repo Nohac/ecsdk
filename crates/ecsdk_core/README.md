@@ -45,6 +45,7 @@ impl ApplyMessage for Message {
 ## Patterns
 
 - Use `world.send_msg(...)` for typed domain flow
-- Use `CmdQueue::queue_cmd(...)` for direct world callbacks
+- Use `queue_cmd_wake(...)` for direct callbacks that should be observed immediately
+- Use `queue_cmd_tick(...)` for direct callbacks that can wait for the next bounded update
 - Use `world.wake()` when a schedule run is needed immediately
 - Use `world.tick()` when rendering or schedule work can wait for the next FPS boundary

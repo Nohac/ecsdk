@@ -121,12 +121,11 @@ fn on_pulling_image(
             let result = backend
                 .pull_image(
                     move |p| {
-                        cmd_progress.queue_cmd(move |world: &mut World| {
+                        cmd_progress.queue_cmd_tick(move |world: &mut World| {
                             if let Some(mut dp) = world.get_mut::<DownloadProgress>(entity) {
                                 dp.downloaded = p.downloaded;
                                 dp.total = p.total;
                             }
-                            world.tick();
                         });
                     },
                     |text| {
@@ -137,12 +136,11 @@ fn on_pulling_image(
             match result {
                 Ok(()) => cmd.send_msg(Message::MarkDone { container_name }),
                 Err(e) => {
-                    cmd.queue_cmd(move |world: &mut World| {
+                    cmd.queue_cmd_wake(move |world: &mut World| {
                         world
                             .entity_mut(entity)
                             .insert((EntityError(e), Done::Failure));
-                    })
-                    .wake();
+                    });
                 }
             }
         }
@@ -181,12 +179,11 @@ fn on_starting(
             match result {
                 Ok(()) => cmd.send_msg(Message::MarkDone { container_name }),
                 Err(e) => {
-                    cmd.queue_cmd(move |world: &mut World| {
+                    cmd.queue_cmd_wake(move |world: &mut World| {
                         world
                             .entity_mut(entity)
                             .insert((EntityError(e), Done::Failure));
-                    })
-                    .wake();
+                    });
                 }
             }
         }
@@ -225,12 +222,11 @@ fn on_stopping(
         match backend.stop_container().await {
             Ok(()) => cmd.send_msg(Message::MarkDone { container_name }),
             Err(e) => {
-                cmd.queue_cmd(move |world: &mut World| {
+                cmd.queue_cmd_wake(move |world: &mut World| {
                     world
                         .entity_mut(entity)
                         .insert((EntityError(e), Done::Failure));
-                })
-                .wake();
+                });
             }
         }
     });

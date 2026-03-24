@@ -1,7 +1,6 @@
 use bevy::app::prelude::*;
 use bevy::ecs::prelude::*;
 use crossterm::event::{Event, EventStream};
-use ecsdk_core::ScheduleControl;
 use ecsdk_tasks::SpawnTask;
 use futures_util::StreamExt;
 
@@ -32,18 +31,16 @@ fn setup_crossterm(mut commands: Commands) {
             let mut events = EventStream::new();
             while let Some(Ok(event)) = events.next().await {
                 if let Event::Resize(cols, rows) = event {
-                    task.queue_cmd(move |world: &mut World| {
+                    task.queue_cmd_tick(move |world: &mut World| {
                         let mut size = world.resource_mut::<TerminalSize>();
                         size.cols = cols;
                         size.rows = rows;
-                        world.tick();
                     });
                 }
                 let event_clone = event.clone();
-                task.queue_cmd(move |world: &mut World| {
+                task.queue_cmd_wake(move |world: &mut World| {
                     world.trigger(TerminalEvent(event_clone));
-                })
-                .wake();
+                });
             }
         });
 }

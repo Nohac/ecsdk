@@ -83,13 +83,10 @@ where
             .await;
 
             let entity = task.entity();
-            task.queue_cmd(move |world: &mut World| {
-                    UnregisterClientCmd { entity }.apply(world);
-                })
-                .wake();
+            task.queue_cmd_wake(move |world: &mut World| {
+                UnregisterClientCmd { entity }.apply(world);
+            });
         });
-
-        world.flush();
 
         world.resource_mut::<ServerBridge>().clients.insert(
             client_id,
@@ -107,7 +104,10 @@ pub struct UnregisterClientCmd {
 
 impl Command for UnregisterClientCmd {
     fn apply(self, world: &mut World) {
-        world.resource_mut::<ServerBridge>().clients.remove(&self.entity);
+        world
+            .resource_mut::<ServerBridge>()
+            .clients
+            .remove(&self.entity);
         if world.get_entity(self.entity).is_ok() {
             world.despawn(self.entity);
         }

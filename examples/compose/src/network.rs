@@ -53,7 +53,7 @@ pub fn spawn_server_listener(mut commands: Commands) {
                 }
             };
 
-            task.queue_cmd(move |world: &mut World| {
+            task.queue_cmd_wake(move |world: &mut World| {
                 ecsdk::network::AcceptClientCmd { stream }.apply(world);
             });
         }
@@ -68,13 +68,13 @@ pub fn spawn_client_connection(mut commands: Commands) {
     commands.spawn_empty().spawn_task(move |task| async move {
         match crate::ipc::connect().await {
             Ok(stream) => {
-                task.queue_cmd(move |world: &mut World| {
+                task.queue_cmd_wake(move |world: &mut World| {
                     ecsdk::network::ConnectClientCmd { stream }.apply(world);
                 });
             }
             Err(e) => {
                 tracing::warn!("Failed to connect to daemon: {e}");
-                task.queue_cmd(|world: &mut World| {
+                task.queue_cmd_wake(|world: &mut World| {
                     world.write_message(AppExit::Success);
                 });
             }

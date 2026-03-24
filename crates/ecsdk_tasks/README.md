@@ -26,8 +26,8 @@ When the owning entity is despawned, the task is cancelled automatically.
 ## TaskQueue API
 
 - `TaskQueue::send_msg(...)` for domain-level outcomes
-- `TaskQueue::queue_cmd(...)` for direct one-off world access
-- `TaskQueue::wake()` when the task needs an immediate schedule run
+- `TaskQueue::queue_cmd_wake(...)` for direct world access that should be observed immediately
+- `TaskQueue::queue_cmd_tick(...)` for direct world access that can wait for the next bounded update
 
 ## Patterns
 

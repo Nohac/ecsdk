@@ -6,11 +6,11 @@ mod daemon;
 mod ipc;
 mod lifecycle;
 mod message;
+mod network;
 mod protocol;
 mod render;
 #[cfg(test)]
 mod replay;
-mod network;
 mod status;
 
 use std::io::IsTerminal;
@@ -28,7 +28,7 @@ use crate::client::{run_status, run_up};
 use crate::daemon::run_daemon;
 use crate::ipc::SOCKET_PATH;
 use crate::message::Message;
-use crate::network::{ConnectionPlugin, SharedReplicationPlugin};
+use crate::network::SharedReplicationPlugin;
 use crate::status::StatusFeature;
 
 #[derive(Parser)]
@@ -55,7 +55,6 @@ pub enum Command {
 pub fn create_isomorphic_app() -> IsomorphicApp<Message> {
     let mut iso = IsomorphicApp::new();
     iso.add_plugin(SharedReplicationPlugin);
-    iso.add_plugin(ConnectionPlugin);
     iso.add_plugin(StatusFeature);
     iso.add_plugin(TracingInitPlugin);
     iso

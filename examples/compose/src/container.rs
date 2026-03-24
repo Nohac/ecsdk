@@ -83,16 +83,6 @@ pub struct LogEntry {
 #[relationship_target(relationship = LogEntry, linked_spawn)]
 pub struct LogView(Vec<Entity>);
 
-impl LogView {
-    pub fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = Entity> + '_ {
-        self.0.iter().copied()
-    }
-}
-
 /// Marker for the system-wide log entity (global messages).
 #[derive(Component, Serialize, Deserialize)]
 pub struct SystemEntity;

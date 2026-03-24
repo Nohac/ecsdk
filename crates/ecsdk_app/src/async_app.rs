@@ -5,8 +5,7 @@ use std::time::Duration;
 use bevy::app::App;
 use bevy::ecs::prelude::World;
 use ecsdk_core::{
-    ApplyMessage, CmdQueue, MessageQueue, QueueCmdExt, SendMsgExt, TickSignal,
-    WakeSignal,
+    ApplyMessage, CmdQueue, MessageQueue, QueueCmdExt, SendMsgExt, TickSignal, WakeSignal,
     WorldCallback,
 };
 use tokio::runtime::Handle;
@@ -14,7 +13,7 @@ use tokio::sync::{Notify, mpsc};
 use tokio::time::interval;
 
 pub struct Receivers<M: ApplyMessage> {
-    pub(crate) state_rx: mpsc::UnboundedReceiver<M>,
+    pub(crate) msg_rx: mpsc::UnboundedReceiver<M>,
     pub(crate) cmd_rx: mpsc::UnboundedReceiver<WorldCallback>,
     pub(crate) tick: Arc<Notify>,
     pub(crate) wake: Arc<Notify>,
@@ -42,6 +41,7 @@ pub fn setup<M: ApplyMessage>() -> AsyncApp<M> {
     app.insert_resource(CmdQueue::new(
         cmd_tx,
         Handle::current(),
+        TickSignal(tick.clone()),
         WakeSignal(wake.clone()),
     ));
     app.insert_resource(MessageQueue::<M>::new(state_tx));
@@ -51,7 +51,7 @@ pub fn setup<M: ApplyMessage>() -> AsyncApp<M> {
     AsyncApp {
         app,
         receivers: Receivers {
-            state_rx,
+            msg_rx: state_rx,
             cmd_rx,
             tick,
             wake,
@@ -105,19 +105,32 @@ impl<M: ApplyMessage> AppSendMsgExt for AsyncApp<M> {
 }
 
 pub trait AppQueueCmdExt {
-    /// Queues a direct world callback from app-level setup code.
-    fn queue_cmd(&mut self, f: impl FnOnce(&mut World) + Send + 'static);
+    /// Queues a direct world callback from app-level setup code and requests an
+    /// immediate update.
+    fn queue_cmd_wake(&mut self, f: impl FnOnce(&mut World) + Send + 'static);
+
+    /// Queues a direct world callback from app-level setup code and requests a
+    /// tick-bound update.
+    fn queue_cmd_tick(&mut self, f: impl FnOnce(&mut World) + Send + 'static);
 }
 
 impl AppQueueCmdExt for App {
-    fn queue_cmd(&mut self, f: impl FnOnce(&mut World) + Send + 'static) {
-        self.world_mut().queue_cmd(f);
+    fn queue_cmd_wake(&mut self, f: impl FnOnce(&mut World) + Send + 'static) {
+        self.world_mut().queue_cmd_wake(f);
+    }
+
+    fn queue_cmd_tick(&mut self, f: impl FnOnce(&mut World) + Send + 'static) {
+        self.world_mut().queue_cmd_tick(f);
     }
 }
 
 impl<M: ApplyMessage> AppQueueCmdExt for AsyncApp<M> {
-    fn queue_cmd(&mut self, f: impl FnOnce(&mut World) + Send + 'static) {
-        self.app.queue_cmd(f);
+    fn queue_cmd_wake(&mut self, f: impl FnOnce(&mut World) + Send + 'static) {
+        self.app.queue_cmd_wake(f);
+    }
+
+    fn queue_cmd_tick(&mut self, f: impl FnOnce(&mut World) + Send + 'static) {
+        self.app.queue_cmd_tick(f);
     }
 }
 
@@ -137,20 +150,19 @@ pub async fn run_async<M: ApplyMessage>(app: &mut App, mut rx: Receivers<M>) {
         return;
     }
 
+    // app.world().components_queue
+
     loop {
         tokio::select! {
             biased;
 
-            Some(event) = rx.state_rx.recv() => {
+            Some(event) = rx.msg_rx.recv() => {
                 event.apply(app.world_mut());
-                while let Ok(event) = rx.state_rx.try_recv() {
+                while let Ok(event) = rx.msg_rx.try_recv() {
                     event.apply(app.world_mut());
                 }
                 drain_cmds(app.world_mut(), &mut rx.cmd_rx);
                 app.update();
-                if app.should_exit().is_some() {
-                    break;
-                }
             }
 
             Some(cb) = rx.cmd_rx.recv() => {
@@ -161,9 +173,6 @@ pub async fn run_async<M: ApplyMessage>(app: &mut App, mut rx: Receivers<M>) {
             _ = rx.wake.notified() => {
                 drain_cmds(app.world_mut(), &mut rx.cmd_rx);
                 app.update();
-                if app.should_exit().is_some() {
-                    break;
-                }
             }
 
             _ = rx.tick.notified() => {
@@ -174,10 +183,11 @@ pub async fn run_async<M: ApplyMessage>(app: &mut App, mut rx: Receivers<M>) {
                 drain_cmds(app.world_mut(), &mut rx.cmd_rx);
                 app.update();
                 needs_tick = false;
-                if app.should_exit().is_some() {
-                    break;
-                }
             }
+        }
+
+        if app.should_exit().is_some() {
+            break;
         }
     }
 }
