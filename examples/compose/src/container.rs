@@ -50,6 +50,9 @@ pub struct DownloadProgress {
     pub total: u64,
 }
 
+#[derive(Component, Serialize, Deserialize)]
+pub struct ServiceColorIdx(pub u8);
+
 #[derive(Clone, Debug)]
 pub struct LogLine {
     pub text: String,
@@ -64,6 +67,10 @@ impl LogBuffer {
     pub fn push(&mut self, text: impl Into<String>) {
         self.lines.push(LogLine { text: text.into() });
     }
+
+    pub fn drain(&mut self) -> impl Iterator<Item = LogLine> + '_ {
+        self.lines.drain(..)
+    }
 }
 
 #[derive(Component, Serialize, Deserialize)]
@@ -73,7 +80,6 @@ pub struct LogEntry {
     #[entities]
     #[relationship]
     pub target: Entity,
-    pub sequence: u64,
     pub label: String,
     pub color_idx: u8,
     pub message: String,

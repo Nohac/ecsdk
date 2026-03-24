@@ -55,7 +55,7 @@ fn progress_bar(downloaded: u64, total: u64, width: usize) -> String {
 pub(super) struct TuiRenderState {
     last_phase: HashMap<Entity, ContainerPhase>,
     last_progress: HashMap<Entity, u64>,
-    last_log_sequence: u64,
+    last_log_count: usize,
     initialized: bool,
     last_cols: u16,
     last_rows: u16,
@@ -179,16 +179,15 @@ fn render_logs(
             let row = rect.row + offset + i as u16;
             render_log_line(out, entry, row, cols);
         }
-        state.last_log_sequence = logs.last().map(|e| e.sequence).unwrap_or(0);
+        state.last_log_count = logs.len();
     } else {
         let bottom_row = rect.row + rect.h - 1;
-        let last_seen = state.last_log_sequence;
-        for entry in logs.iter().filter(|entry| entry.sequence > last_seen) {
+        for entry in logs.iter().skip(state.last_log_count) {
             let _ = out.queue(MoveTo(0, bottom_row));
             let _ = out.queue(ScrollUp(1));
             render_log_line(out, entry, bottom_row, cols);
-            state.last_log_sequence = entry.sequence;
         }
+        state.last_log_count = logs.len();
     }
 }
 
@@ -261,6 +260,7 @@ pub(super) fn render_tui(
         state.last_rows = rows;
         state.last_phase.clear();
         state.last_progress.clear();
+        state.last_log_count = 0;
     }
 
     render_header(

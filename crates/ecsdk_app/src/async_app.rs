@@ -213,8 +213,6 @@ pub async fn run_async<M: ApplyMessage>(
         return;
     }
 
-    // app.world().components_queue
-
     loop {
         tokio::select! {
             biased;

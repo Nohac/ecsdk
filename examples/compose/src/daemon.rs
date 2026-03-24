@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use ecsdk::prelude::*;
 use ecsdk::tasks::SpawnTask;
 use tokio::signal::ctrl_c;
@@ -13,46 +11,36 @@ const LOG_ENTRY_CAP: usize = 200;
 
 fn sync_log_entries(
     mut commands: Commands,
-    query: Query<(Entity, &ContainerName, Ref<LogBuffer>), Changed<LogBuffer>>,
+    mut query: Query<
+        (&ContainerName, &ServiceColorIdx, &mut LogBuffer),
+        Changed<LogBuffer>,
+    >,
     related: Query<&LogView>,
     log_view: Query<Entity, With<LogView>>,
-    mut tracked: Local<HashMap<Entity, usize>>,
-    mut color_map: Local<HashMap<Entity, u8>>,
-    mut next_sequence: Local<u64>,
-    mut next_color_idx: Local<u8>,
 ) {
     let Ok(log_view) = log_view.single() else {
         return;
     };
 
-    let mut appended = false;
+    let mut appended_count = 0usize;
 
-    for (source, name, log_buf) in &query {
-        let color_idx = *color_map.entry(source).or_insert_with(|| {
-            let idx = *next_color_idx;
-            *next_color_idx = next_color_idx.wrapping_add(1);
-            idx
-        });
-        let sent = tracked.get(&source).copied().unwrap_or(0);
-        for line in &log_buf.lines[sent..] {
-            appended = true;
-            *next_sequence += 1;
+    for (name, color_idx, mut log_buf) in &mut query {
+        for line in log_buf.drain() {
+            appended_count += 1;
             commands.spawn((
                 Replicated,
                 LogEntry {
                     target: log_view,
-                    sequence: *next_sequence,
                     label: name.0.clone(),
-                    color_idx,
-                    message: line.text.clone(),
+                    color_idx: color_idx.0,
+                    message: line.text,
                 },
             ));
         }
-        tracked.insert(source, log_buf.lines.len());
     }
 
-    if appended && let Ok(entries) = related.get(log_view) {
-        let excess = entries.len().saturating_sub(LOG_ENTRY_CAP);
+    if appended_count > 0 && let Ok(entries) = related.get(log_view) {
+        let excess = (entries.len() + appended_count).saturating_sub(LOG_ENTRY_CAP);
         for entry in entries.iter().take(excess) {
             commands.entity(entry).despawn();
         }
@@ -107,6 +95,7 @@ impl Plugin for ComposeServerPlugin {
 
         app.world_mut().spawn((
             ContainerName("[system]".into()),
+            ServiceColorIdx(4),
             LogBuffer::default(),
             SystemEntity,
             Replicated,
@@ -145,5 +134,9 @@ fn attach_mock_backend(
     };
     commands
         .entity(entity)
-        .insert((Backend(MockBackend::new(&name.0, &image.0)), Replicated));
+        .insert((
+            Backend(MockBackend::new(&name.0, &image.0)),
+            ServiceColorIdx((entity.index().index() % 6) as u8),
+            Replicated,
+        ));
 }

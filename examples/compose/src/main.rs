@@ -146,7 +146,7 @@ async fn main() {
     let command = cli.command.unwrap_or(Command::Up);
     ensure_daemon(matches!(command, Command::Up)).await;
 
-    let mut app = iso.build_client();
+    let app = iso.build_client();
     let app = match command {
         Command::Up => run_up(app, resolve_render_mode(cli.output)),
         Command::Status => run_status(app),

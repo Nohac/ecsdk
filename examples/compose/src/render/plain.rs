@@ -7,7 +7,7 @@ use crate::container::*;
 #[derive(Default)]
 pub(super) struct PlainRenderState {
     last_phase: HashMap<Entity, ContainerPhase>,
-    last_log_sequence: u64,
+    last_log_count: usize,
 }
 
 #[allow(clippy::type_complexity)]
@@ -45,12 +45,10 @@ pub(super) fn render_plain(
         }
     }
 
-    for entry_entity in log_view.iter() {
-        if let Ok(entry) = log_entries.get(entry_entity)
-            && entry.sequence > state.last_log_sequence
-        {
+    for entry_entity in log_view.iter().skip(state.last_log_count) {
+        if let Ok(entry) = log_entries.get(entry_entity) {
             println!("  {} | {}", entry.label, entry.message);
-            state.last_log_sequence = entry.sequence;
         }
     }
+    state.last_log_count = log_view.iter().len();
 }
