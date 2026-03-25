@@ -71,11 +71,8 @@ impl<M: ApplyMessage> Default for IsomorphicApp<M> {
 
 pub trait IsomorphicAppExt {
     fn add_shared_plugin<P: IsomorphicPlugin>(&mut self, plugin: P) -> &mut Self;
-    fn add_isomorphic_plugin<P: IsomorphicPlugin>(
-        &mut self,
-        role: AppRole,
-        plugin: P,
-    ) -> &mut Self;
+    fn add_isomorphic_plugin<P: IsomorphicPlugin>(&mut self, role: AppRole, plugin: P)
+    -> &mut Self;
 }
 
 impl IsomorphicAppExt for App {

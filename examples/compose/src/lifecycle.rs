@@ -5,11 +5,11 @@ use tracing::Instrument;
 
 use crate::backend::ContainerBackend;
 use crate::backend::ContainerRuntime;
-use crate::container::*;
 use crate::container::container_phase::{
     Failed, Pending, PullingImage, Running, Starting, Stopped, Stopping,
 };
 use crate::container::orchestrator_phase::{AllRunning, AllStopped, Deploying, ShuttingDown};
+use crate::container::*;
 use crate::message::Message;
 
 #[derive(Component)]

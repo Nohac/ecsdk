@@ -71,12 +71,7 @@ impl<S> tracing_subscriber::Layer<S> for EcsTracingLayer
 where
     S: tracing::Subscriber + for<'a> LookupSpan<'a>,
 {
-    fn on_new_span(
-        &self,
-        attrs: &span::Attributes<'_>,
-        id: &span::Id,
-        ctx: Context<'_, S>,
-    ) {
+    fn on_new_span(&self, attrs: &span::Attributes<'_>, id: &span::Id, ctx: Context<'_, S>) {
         let mut visitor = EntityVisitor { entity_bits: None };
         attrs.record(&mut visitor);
 

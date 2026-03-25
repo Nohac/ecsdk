@@ -55,9 +55,7 @@ impl ContainerBackend for MockBackend {
                 ("oO0OoO0Oo Redis is starting oO0OoO0Oo", 150),
                 ("Ready to accept connections on port 6379", 250),
             ],
-            "api-server" => vec![
-                ("Connecting to database...", 300),
-            ],
+            "api-server" => vec![("Connecting to database...", 300)],
             "web-frontend" => vec![
                 ("Compiling assets...", 400),
                 ("Serving on http://0.0.0.0:3000", 300),

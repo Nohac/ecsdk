@@ -3,8 +3,8 @@ mod tui;
 
 pub use ecsdk::term::TerminalGuard;
 
-use ecsdk::prelude::*;
 use clap::ValueEnum;
+use ecsdk::prelude::*;
 use ecsdk::term::TermPlugin;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, ValueEnum)]

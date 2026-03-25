@@ -56,10 +56,7 @@ impl Plugin for ComposeClientPlugin {
 // Entry point
 // ---------------------------------------------------------------------------
 
-pub fn run_up(
-    mut app: AsyncApp<Message>,
-    mode: RenderMode,
-) -> AsyncApp<Message> {
+pub fn run_up(mut app: AsyncApp<Message>, mode: RenderMode) -> AsyncApp<Message> {
     app.add_plugins(ComposeClientPlugin { mode });
     app
 }

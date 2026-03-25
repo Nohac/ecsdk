@@ -8,14 +8,14 @@ pub use ecsdk_core as core;
 pub use ecsdk_macros as macros;
 #[cfg(feature = "network")]
 pub use ecsdk_network as network;
-#[cfg(feature = "network")]
-pub use ecsdk_transport as transport;
 #[cfg(feature = "tasks")]
 pub use ecsdk_tasks as tasks;
 #[cfg(feature = "term")]
 pub use ecsdk_term as term;
 #[cfg(feature = "tracing")]
 pub use ecsdk_tracing as tracing;
+#[cfg(feature = "network")]
+pub use ecsdk_transport as transport;
 pub use serde;
 
 pub mod prelude {
@@ -39,8 +39,7 @@ pub mod prelude {
 
     #[cfg(feature = "network")]
     pub use ecsdk_network::{
-        AppRole, ClientRequest, InitialConnection, IsomorphicApp,
-        IsomorphicAppExt, IsomorphicPlugin, RequestPlugin,
-        ServerDisconnected,
+        AppRole, ClientRequest, InitialConnection, IsomorphicApp, IsomorphicAppExt,
+        IsomorphicPlugin, RequestPlugin, ServerDisconnected,
     };
 }
