@@ -11,10 +11,7 @@ const LOG_ENTRY_CAP: usize = 200;
 
 fn sync_log_entries(
     mut commands: Commands,
-    mut query: Query<
-        (&ContainerName, &ServiceColorIdx, &mut LogBuffer),
-        Changed<LogBuffer>,
-    >,
+    mut query: Query<(&ContainerName, &ServiceColorIdx, &mut LogBuffer), Changed<LogBuffer>>,
     related: Query<&LogView>,
     log_view: Query<Entity, With<LogView>>,
 ) {
@@ -39,11 +36,14 @@ fn sync_log_entries(
         }
     }
 
-    if appended_count > 0 && let Ok(entries) = related.get(log_view) {
+    if appended_count > 0
+        && let Ok(entries) = related.get(log_view)
+    {
         let excess = (entries.len() + appended_count).saturating_sub(LOG_ENTRY_CAP);
         for entry in entries.iter().take(excess) {
             commands.entity(entry).despawn();
         }
+        commands.tick();
     }
 }
 
@@ -132,11 +132,9 @@ fn attach_mock_backend(
     let Ok((name, image)) = query.get(entity) else {
         return;
     };
-    commands
-        .entity(entity)
-        .insert((
-            Backend(MockBackend::new(&name.0, &image.0)),
-            ServiceColorIdx((entity.index().index() % 6) as u8),
-            Replicated,
-        ));
+    commands.entity(entity).insert((
+        Backend(MockBackend::new(&name.0, &image.0)),
+        ServiceColorIdx((entity.index().index() % 6) as u8),
+        Replicated,
+    ));
 }
