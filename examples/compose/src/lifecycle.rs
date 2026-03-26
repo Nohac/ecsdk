@@ -1,3 +1,6 @@
+use std::sync::Arc;
+
+use bevy::prelude::Deref;
 use ecsdk::prelude::*;
 use ecsdk::tasks::SpawnTask;
 use seldom_state::prelude::*;
@@ -24,8 +27,8 @@ pub struct ShutdownAll;
 pub struct ShutdownRequested(pub bool);
 
 /// Per-entity backend that knows which container it manages.
-#[derive(Component, Clone)]
-pub struct Backend(pub ContainerRuntime);
+#[derive(Component, Clone, Deref)]
+pub struct Backend(pub Arc<ContainerRuntime>);
 
 // ── Triggers ──
 
@@ -105,7 +108,7 @@ fn on_pulling_image(
     let Ok(backend) = backends.get(entity) else {
         return;
     };
-    let backend = backend.0.clone();
+    let backend = backend.clone();
     let container_name = names.get(entity).map(|n| n.0.clone()).unwrap_or_default();
 
     commands.entity(entity).insert(DownloadProgress {
@@ -164,7 +167,7 @@ fn on_starting(
     let Ok(backend) = backends.get(entity) else {
         return;
     };
-    let backend = backend.0.clone();
+    let backend = backend.clone();
     let container_name = names.get(entity).map(|n| n.0.clone()).unwrap_or_default();
 
     commands.entity(entity).spawn_task(move |cmd| {
@@ -214,7 +217,7 @@ fn on_stopping(
     let Ok(backend) = backends.get(entity) else {
         return;
     };
-    let backend = backend.0.clone();
+    let backend = backend.clone();
     let container_name = names.get(entity).map(|n| n.0.clone()).unwrap_or_default();
 
     commands.entity(entity).spawn_task(move |cmd| async move {

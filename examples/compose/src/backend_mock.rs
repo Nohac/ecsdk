@@ -5,7 +5,6 @@ use rand::Rng;
 
 use crate::backend::{ContainerBackend, PullProgress};
 
-#[derive(Clone)]
 pub struct MockBackend {
     pub name: String,
     pub image: String,

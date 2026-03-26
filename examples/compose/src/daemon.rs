@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use ecsdk::prelude::*;
 use ecsdk::tasks::SpawnTask;
 use tokio::signal::ctrl_c;
@@ -133,7 +135,7 @@ fn attach_mock_backend(
         return;
     };
     commands.entity(entity).insert((
-        Backend(MockBackend::new(&name.0, &image.0)),
+        Backend(Arc::new(MockBackend::new(&name.0, &image.0))),
         ServiceColorIdx((entity.index().index() % 6) as u8),
         Replicated,
     ));
